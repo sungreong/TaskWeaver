@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
-import { detailedTaskAPI } from '../services/api';
+import { detailedTaskAPI, projectAPI } from '../services/api';
 
-const DetailedTaskFormModal = ({ isOpen, onClose, onSave, defaultProject, defaultStage }) => {
+const DetailedTaskFormModal = ({ isOpen, onClose, onSave, defaultProject, defaultStage, isFieldsEditable = false, initialData = null }) => {
   const [formData, setFormData] = useState({
     project: defaultProject || '',
     stage: defaultStage || '',
@@ -17,15 +17,101 @@ const DetailedTaskFormModal = ({ isOpen, onClose, onSave, defaultProject, defaul
 
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [error, setError] = useState('');
-
-  // defaultProject와 defaultStage가 변경될 때 폼 데이터 업데이트
+  const [projects, setProjects] = useState([]);
+  const [projectStages, setProjectStages] = useState([]);
+  const [isLoadingProjects, setIsLoadingProjects] = useState(false);
+  
+  // 프로젝트 목록 로딩
   useEffect(() => {
-    setFormData(prev => ({
-      ...prev,
-      project: defaultProject || '',
-      stage: defaultStage || ''
-    }));
-  }, [defaultProject, defaultStage]);
+    const loadProjects = async () => {
+      setIsLoadingProjects(true);
+      try {
+        const response = await projectAPI.getProjectNames();
+        setProjects(response.data);
+      } catch (err) {
+        console.error('Error loading projects:', err);
+      } finally {
+        setIsLoadingProjects(false);
+      }
+    };
+    
+    if (isOpen && isFieldsEditable) {
+      loadProjects();
+    }
+  }, [isOpen, isFieldsEditable]);
+  
+  // 프로젝트 변경 시 해당 프로젝트의 단계 목록 로딩
+  useEffect(() => {
+    const loadProjectStages = async () => {
+      if (!formData.project) {
+        setProjectStages([]);
+        return;
+      }
+      
+      try {
+        const response = await projectAPI.getProjectByName(formData.project);
+        if (response.data && response.data.stages) {
+          setProjectStages(response.data.stages);
+          
+          // 현재 선택된 단계가 새 프로젝트의 단계 목록에 없으면 첫 번째 단계로 설정
+          if (response.data.stages.length > 0 && !response.data.stages.includes(formData.stage)) {
+            setFormData(prev => ({
+              ...prev,
+              stage: response.data.stages[0]
+            }));
+          }
+        }
+      } catch (err) {
+        console.error('Error loading project stages:', err);
+      }
+    };
+    
+    if (isFieldsEditable && formData.project) {
+      loadProjectStages();
+    }
+  }, [formData.project, isFieldsEditable]);
+  
+  // initialData가 변경될 때 폼 데이터 업데이트
+  useEffect(() => {
+    if (initialData) {
+      setFormData({
+        project: initialData.project || defaultProject || '',
+        stage: initialData.stage || defaultStage || '',
+        task_item: initialData.task_item || '',
+        assignee: initialData.assignee || '',
+        current_status: initialData.current_status || 'not_started',
+        has_risk: initialData.has_risk || false,
+        description: initialData.description || '',
+        planned_end_date: initialData.planned_end_date || '',
+        actual_end_date: initialData.actual_end_date || '',
+        progress_rate: initialData.progress_rate || 0
+      });
+    } else {
+      setFormData({
+        project: defaultProject || '',
+        stage: defaultStage || '',
+        task_item: '',
+        assignee: '',
+        current_status: 'not_started',
+        has_risk: false,
+        description: '',
+        planned_end_date: '',
+        actual_end_date: '',
+        progress_rate: 0
+      });
+    }
+  }, [initialData, defaultProject, defaultStage]);
+
+  // defaultProject와 defaultStage가 변경될 때 폼 데이터 업데이트 (initialData가 없을 때만)
+  useEffect(() => {
+    if (!initialData) {
+      setFormData(prev => ({
+        ...prev,
+        project: defaultProject || '',
+        stage: defaultStage || ''
+      }));
+    }
+  }, [defaultProject, defaultStage, initialData]);
 
   // 폼 데이터 변경 핸들러
   const handleChange = (name, value) => {
@@ -54,12 +140,23 @@ const DetailedTaskFormModal = ({ isOpen, onClose, onSave, defaultProject, defaul
       setIsSubmitting(true);
       setError('');
       
-      const response = await detailedTaskAPI.createDetailedTask(formData);
+      let response;
+      
+      if (initialData) {
+        // 기존 업무 수정
+        response = await detailedTaskAPI.updateDetailedTask(initialData.id, formData);
+      } else {
+        // 새 업무 생성
+        response = await detailedTaskAPI.createDetailedTask(formData);
+      }
+      
       onSave(response.data);
       handleClose();
     } catch (err) {
       // 에러 메시지 처리
-      let errorMessage = '상세 업무 생성 중 오류가 발생했습니다.';
+      let errorMessage = initialData 
+        ? '상세 업무 수정 중 오류가 발생했습니다.' 
+        : '상세 업무 생성 중 오류가 발생했습니다.';
       
       if (err.response?.data?.detail) {
         // FastAPI validation error가 배열 형태일 때
@@ -76,7 +173,7 @@ const DetailedTaskFormModal = ({ isOpen, onClose, onSave, defaultProject, defaul
       }
       
       setError(errorMessage);
-      console.error('Create detailed task error:', err);
+      console.error('Task operation error:', err);
     } finally {
       setIsSubmitting(false);
     }
@@ -109,9 +206,11 @@ const DetailedTaskFormModal = ({ isOpen, onClose, onSave, defaultProject, defaul
         <div className="bg-gradient-to-r from-blue-500 to-purple-600 px-6 py-4">
           <div className="flex justify-between items-center">
             <div>
-              <h2 className="text-xl font-bold text-white">새 상세 업무 추가</h2>
+              <h2 className="text-xl font-bold text-white">
+                {initialData ? '상세 업무 수정' : '새 상세 업무 추가'}
+              </h2>
               <p className="text-blue-100 text-sm">
-                {defaultProject && `${defaultProject} - ${defaultStage}`}
+                {formData.project && `${formData.project} - ${formData.stage}`}
               </p>
             </div>
             <button
@@ -142,30 +241,57 @@ const DetailedTaskFormModal = ({ isOpen, onClose, onSave, defaultProject, defaul
 
           {/* 기본 정보 */}
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            {/* 프로젝트 (읽기 전용) */}
+            {/* 프로젝트 (조건부 드롭다운/읽기 전용) */}
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-2">
                 프로젝트 *
               </label>
-              <input
-                type="text"
-                value={formData.project}
-                readOnly
-                className="w-full px-3 py-2 border border-gray-300 rounded-lg bg-gray-50 text-gray-700"
-              />
+              {isFieldsEditable ? (
+                <select
+                  value={formData.project}
+                  onChange={(e) => handleChange('project', e.target.value)}
+                  disabled={isLoadingProjects}
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                >
+                  <option value="">프로젝트 선택</option>
+                  {projects.map(projectName => (
+                    <option key={projectName} value={projectName}>{projectName}</option>
+                  ))}
+                </select>
+              ) : (
+                <input
+                  type="text"
+                  value={formData.project}
+                  readOnly
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg bg-gray-50 text-gray-700"
+                />
+              )}
             </div>
 
-            {/* 단계 (읽기 전용) */}
+            {/* 단계 (조건부 드롭다운/읽기 전용) */}
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-2">
                 단계 *
               </label>
-              <input
-                type="text"
-                value={formData.stage}
-                readOnly
-                className="w-full px-3 py-2 border border-gray-300 rounded-lg bg-gray-50 text-gray-700"
-              />
+              {isFieldsEditable && projectStages.length > 0 ? (
+                <select
+                  value={formData.stage}
+                  onChange={(e) => handleChange('stage', e.target.value)}
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                >
+                  {projectStages.map(stage => (
+                    <option key={stage} value={stage}>{stage}</option>
+                  ))}
+                </select>
+              ) : (
+                <input
+                  type="text"
+                  value={formData.stage}
+                  readOnly={!isFieldsEditable || projectStages.length === 0}
+                  onChange={(e) => handleChange('stage', e.target.value)}
+                  className={`w-full px-3 py-2 border border-gray-300 rounded-lg ${!isFieldsEditable ? 'bg-gray-50' : 'focus:ring-2 focus:ring-blue-500 focus:border-transparent'} text-gray-700`}
+                />
+              )}
             </div>
 
             {/* 업무명 */}

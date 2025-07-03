@@ -1135,51 +1135,51 @@ Enter: 자동 들여쓰기/리스트 계속"
     <div className="w-full space-y-4">
       {/* 대시보드 헤더 - 풀스크린에서는 간소화 */}
       {!fullscreen && (
-        <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-6">
-          <div className="flex flex-col xl:flex-row justify-between items-start xl:items-center gap-6">
-            <div className="flex-1">
-              <h2 className="text-2xl font-bold text-gray-900 mb-2">주차별 보고서 관리</h2>
-              <p className="text-gray-600">프로젝트별 주차 진행 상황을 한눈에 확인하고 관리하세요</p>
+      <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-6">
+        <div className="flex flex-col xl:flex-row justify-between items-start xl:items-center gap-6">
+          <div className="flex-1">
+            <h2 className="text-2xl font-bold text-gray-900 mb-2">주차별 보고서 관리</h2>
+            <p className="text-gray-600">프로젝트별 주차 진행 상황을 한눈에 확인하고 관리하세요</p>
+          </div>
+          
+          {/* 뷰 모드 및 통계 */}
+          <div className="flex items-center gap-6">
+            <div className="text-sm text-gray-600 bg-gray-50 px-4 py-2 rounded-lg">
+              총 <span className="font-semibold text-blue-600">{reports.length}</span>개 보고서
             </div>
             
-            {/* 뷰 모드 및 통계 */}
-            <div className="flex items-center gap-6">
-              <div className="text-sm text-gray-600 bg-gray-50 px-4 py-2 rounded-lg">
-                총 <span className="font-semibold text-blue-600">{reports.length}</span>개 보고서
-              </div>
-              
-              {/* 뷰 모드 전환 버튼 */}
-              <div className="flex bg-gray-100 rounded-lg p-1">
-                <button
-                  onClick={() => setViewMode('table')}
-                  className={`px-4 py-2 text-sm font-medium rounded-md transition-all duration-200 ${
-                    viewMode === 'table'
-                      ? 'bg-white text-gray-900 shadow-sm'
-                      : 'text-gray-600 hover:text-gray-900'
-                  }`}
-                >
-                  <svg className="w-4 h-4 mr-2 inline" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 10h18M3 14h18m-9-4v8m-7 0V4a1 1 0 011-1h16a1 1 0 011 1v16a1 1 0 01-1 1H5a1 1 0 01-1-1z" />
-                  </svg>
-                  테이블 뷰
-                </button>
-                <button
-                  onClick={() => setViewMode('card')}
-                  className={`px-4 py-2 text-sm font-medium rounded-md transition-all duration-200 ${
-                    viewMode === 'card'
-                      ? 'bg-white text-gray-900 shadow-sm'
-                      : 'text-gray-600 hover:text-gray-900'
-                  }`}
-                >
-                  <svg className="w-4 h-4 mr-2 inline" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10" />
-                  </svg>
-                  카드 뷰
-                </button>
-              </div>
+            {/* 뷰 모드 전환 버튼 */}
+            <div className="flex bg-gray-100 rounded-lg p-1">
+              <button
+                onClick={() => setViewMode('table')}
+                className={`px-4 py-2 text-sm font-medium rounded-md transition-all duration-200 ${
+                  viewMode === 'table'
+                    ? 'bg-white text-gray-900 shadow-sm'
+                    : 'text-gray-600 hover:text-gray-900'
+                }`}
+              >
+                <svg className="w-4 h-4 mr-2 inline" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 10h18M3 14h18m-9-4v8m-7 0V4a1 1 0 011-1h16a1 1 0 011 1v16a1 1 0 01-1 1H5a1 1 0 01-1-1z" />
+                </svg>
+                테이블 뷰
+              </button>
+              <button
+                onClick={() => setViewMode('card')}
+                className={`px-4 py-2 text-sm font-medium rounded-md transition-all duration-200 ${
+                  viewMode === 'card'
+                    ? 'bg-white text-gray-900 shadow-sm'
+                    : 'text-gray-600 hover:text-gray-900'
+                }`}
+              >
+                <svg className="w-4 h-4 mr-2 inline" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10" />
+                </svg>
+                카드 뷰
+              </button>
             </div>
           </div>
         </div>
+      </div>
       )}
 
       {/* 풀스크린 모드 - 간소화된 헤더 */}
@@ -1230,7 +1230,7 @@ Enter: 자동 들여쓰기/리스트 계속"
 
       {/* 필터 패널 - 풀스크린에서는 숨김 */}
       {!fullscreen && (
-        <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-6">
+      <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-6">
         <div className="flex items-center gap-2 mb-4">
           <svg className="w-5 h-5 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 4a1 1 0 011-1h16a1 1 0 011 1v2.586a1 1 0 01-.293.707l-6.414 6.414a1 1 0 00-.293.707V17l-4 4v-6.586a1 1 0 00-.293-.707L3.293 7.293A1 1 0 013 6.586V4z" />

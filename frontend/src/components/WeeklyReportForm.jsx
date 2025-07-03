@@ -555,15 +555,15 @@ const WeeklyReportForm = ({ editingReport, onSave, onCancel, defaultProject, ful
                 📋 연관 상세 업무 선택
               </label>
               <div className="flex items-center space-x-2">
-                {availableTasks.length > 0 && (
-                  <button
-                    type="button"
-                    onClick={toggleAllTasks}
-                    className="text-sm text-blue-600 hover:text-blue-800 font-medium"
-                  >
-                    {selectedTaskIds.length === availableTasks.length ? '전체 해제' : '전체 선택'}
-                  </button>
-                )}
+              {availableTasks.length > 0 && (
+                <button
+                  type="button"
+                  onClick={toggleAllTasks}
+                  className="text-sm text-blue-600 hover:text-blue-800 font-medium"
+                >
+                  {selectedTaskIds.length === availableTasks.length ? '전체 해제' : '전체 선택'}
+                </button>
+              )}
                 <button
                   type="button"
                   onClick={() => setShowTaskModal(true)}

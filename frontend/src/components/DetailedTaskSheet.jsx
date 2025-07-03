@@ -630,8 +630,11 @@ const DetailedTaskSheet = () => {
       <DetailedTaskFormModal
         isOpen={showFormModal}
         onClose={closeFormModal}
-        onSuccess={handleFormSuccess}
+        onSave={handleFormSuccess}
+        defaultProject={editingTask?.project || ''}
+        defaultStage={editingTask?.stage || ''}
         initialData={editingTask}
+        isFieldsEditable={true}
       />
 
       {/* 파일 업로드 모달 */}
