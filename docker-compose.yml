@@ -1,0 +1,37 @@
+version: "3.8"
+
+services:
+  backend:
+    build: ./backend
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./data:/app/data  # SQLite 데이터베이스 볼륨 마운트
+      - ./backend:/app
+    environment:
+      - PYTHONPATH=/app
+      - INIT_DB=true
+    networks:
+      - project-tracker
+
+  frontend:
+    build: ./frontend
+    ports:
+      - "3000:3000"
+    volumes:
+      - ./frontend:/app          # 개발 시 코드 변경 반영을 위한 마운트
+      - /app/node_modules        # node_modules 제외
+    depends_on:
+      - backend
+    environment:
+      - VITE_API_URL=http://localhost:8000
+    networks:
+      - project-tracker
+
+networks:
+  project-tracker:
+    driver: bridge
+
+volumes:
+  data:
+    driver: local 
