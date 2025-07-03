@@ -131,6 +131,9 @@ export const summaryAPI = {
   getEnhancedDashboard: () => api.get('/summary/enhanced-dashboard'),
   getEnhancedProjectSummary: (projectName) => api.get(`/summary/project/${encodeURIComponent(projectName)}/enhanced`),
   getAssigneeSummary: (assigneeName) => api.get(`/summary/assignee/${encodeURIComponent(assigneeName)}`),
+  
+  // 🆕 프로젝트 타임라인 API
+  getProjectTimeline: (projectName) => api.get(`/summary/project/${encodeURIComponent(projectName)}/timeline`),
 };
 
 // 상세 업무 API 함수들

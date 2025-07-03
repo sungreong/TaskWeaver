@@ -1,12 +1,14 @@
 from fastapi import APIRouter, Depends, Response
-from sqlalchemy.orm import Session
-from sqlalchemy import desc, distinct
+from sqlalchemy.orm import Session, joinedload
+from sqlalchemy import desc, func, distinct, and_
+from database import get_db
+from models import WeeklyReportDB, DetailedTaskDB, ProjectDB, TaskStatus
 import pandas as pd
 from io import StringIO
-from database import get_db
-from models import WeeklyReportDB, DetailedTaskDB
+import logging
 
 router = APIRouter(prefix="/export", tags=["export"])
+logger = logging.getLogger(__name__)
 
 
 @router.get("/weekly-reports.csv")
@@ -20,12 +22,14 @@ def export_weekly_reports_csv(
 ):
     """주차별 보고서를 CSV 형식으로 내보냅니다."""
 
-    # 쿼리 구성
-    query = db.query(WeeklyReportDB)
+    # 쿼리 구성 (joinedload 사용)
+    query = db.query(WeeklyReportDB).options(joinedload(WeeklyReportDB.project_obj))
 
     # 필터 적용
     if project:
-        query = query.filter(WeeklyReportDB.project.ilike(f"%{project}%"))
+        query = query.join(ProjectDB, WeeklyReportDB.project_id == ProjectDB.id).filter(
+            ProjectDB.name.ilike(f"%{project}%")
+        )
     if week:
         query = query.filter(WeeklyReportDB.week == week)
     if stage:
@@ -36,7 +40,7 @@ def export_weekly_reports_csv(
         query = query.filter(WeeklyReportDB.week <= end_week)
 
     # 최신순 정렬
-    reports = query.order_by(desc(WeeklyReportDB.week), WeeklyReportDB.project, WeeklyReportDB.stage).all()
+    reports = query.order_by(desc(WeeklyReportDB.week), WeeklyReportDB.project_obj.name, WeeklyReportDB.stage).all()
 
     # 데이터 변환
     data = []
@@ -44,7 +48,7 @@ def export_weekly_reports_csv(
         data.append(
             {
                 "ID": report.id,
-                "프로젝트": report.project,
+                "프로젝트": report.project_obj.name,
                 "주차": report.week,
                 "단계": report.stage,
                 "이번 주 한 일": report.this_week_work,
@@ -83,16 +87,20 @@ def export_project_summary_csv(db: Session = Depends(get_db)):
     """프로젝트별 요약 정보를 CSV 형식으로 내보냅니다."""
 
     # 모든 프로젝트 목록 조회
-    projects = db.query(distinct(WeeklyReportDB.project)).all()
+    projects = db.query(ProjectDB.name).distinct().all()
 
     data = []
     for project_tuple in projects:
         project_name = project_tuple[0]
 
         # 프로젝트의 모든 보고서 조회
+        project_obj = db.query(ProjectDB).filter(ProjectDB.name == project_name).first()
+        if not project_obj:
+            continue
+
         reports = (
             db.query(WeeklyReportDB)
-            .filter(WeeklyReportDB.project == project_name)
+            .filter(WeeklyReportDB.project_id == project_obj.id)
             .order_by(desc(WeeklyReportDB.week))
             .all()
         )
@@ -159,8 +167,9 @@ def export_weekly_summary_csv(db: Session = Depends(get_db)):
         # 해당 주차의 모든 보고서 조회
         reports = (
             db.query(WeeklyReportDB)
+            .options(joinedload(WeeklyReportDB.project_obj))
             .filter(WeeklyReportDB.week == week)
-            .order_by(WeeklyReportDB.project, WeeklyReportDB.stage)
+            .order_by(WeeklyReportDB.project_obj.name, WeeklyReportDB.stage)
             .all()
         )
 
@@ -168,14 +177,15 @@ def export_weekly_summary_csv(db: Session = Depends(get_db)):
             # 프로젝트별 그룹핑
             project_groups = {}
             for report in reports:
-                if report.project not in project_groups:
-                    project_groups[report.project] = []
-                project_groups[report.project].append(report)
+                project_name = report.project_obj.name
+                if project_name not in project_groups:
+                    project_groups[project_name] = []
+                project_groups[project_name].append(report)
 
             projects_with_issues = 0
             total_issues = 0
 
-            for project, project_reports in project_groups.items():
+            for project_name, project_reports in project_groups.items():
                 has_issues = any(r.issues_risks and r.issues_risks.strip() for r in project_reports)
                 if has_issues:
                     projects_with_issues += 1
@@ -219,12 +229,14 @@ def export_detailed_tasks_csv(
 ):
     """상세 업무를 CSV 형식으로 내보냅니다."""
 
-    # 쿼리 구성
-    query = db.query(DetailedTaskDB)
+    # 쿼리 구성 (joinedload 사용)
+    query = db.query(DetailedTaskDB).options(joinedload(DetailedTaskDB.project_obj))
 
     # 필터 적용
     if project:
-        query = query.filter(DetailedTaskDB.project.ilike(f"%{project}%"))
+        query = query.join(ProjectDB, DetailedTaskDB.project_id == ProjectDB.id).filter(
+            ProjectDB.name.ilike(f"%{project}%")
+        )
     if assignee:
         query = query.filter(DetailedTaskDB.assignee.ilike(f"%{assignee}%"))
     if current_status:
@@ -232,21 +244,12 @@ def export_detailed_tasks_csv(
     if has_risk is not None:
         query = query.filter(DetailedTaskDB.has_risk == has_risk)
     if start_date:
-        query = query.filter(DetailedTaskDB.start_date >= start_date)
+        query = query.filter(DetailedTaskDB.planned_end_date >= start_date)
     if end_date:
         query = query.filter(DetailedTaskDB.planned_end_date <= end_date)
 
-    # 최신순 정렬
-    tasks = query.order_by(desc(DetailedTaskDB.updated_at)).all()
-
-    # 상태 한글 매핑
-    status_mapping = {
-        "not_started": "시작안함",
-        "in_progress": "진행중",
-        "completed": "완료",
-        "on_hold": "보류",
-        "cancelled": "취소",
-    }
+    # 정렬
+    tasks = query.order_by(DetailedTaskDB.project_obj.name, DetailedTaskDB.stage, DetailedTaskDB.task_item).all()
 
     # 데이터 변환
     data = []
@@ -254,24 +257,16 @@ def export_detailed_tasks_csv(
         data.append(
             {
                 "ID": task.id,
-                "프로젝트": task.project,
+                "프로젝트": task.project_obj.name,
+                "단계": task.stage or "",
                 "업무 항목": task.task_item,
                 "담당자": task.assignee or "",
-                "전주 상태": status_mapping.get(
-                    task.previous_status.value if task.previous_status else "",
-                    task.previous_status.value if task.previous_status else "",
-                ),
-                "이번주 상태": status_mapping.get(
-                    task.current_status.value if task.current_status else "",
-                    task.current_status.value if task.current_status else "",
-                ),
+                "현재 상태": task.current_status.value if task.current_status else "",
                 "리스크 여부": "예" if task.has_risk else "아니오",
-                "요청사항": task.requests or "",
-                "비고": task.notes or "",
-                "시작일": task.start_date.strftime("%Y-%m-%d") if task.start_date else "",
+                "설명": task.description or "",
                 "종료예정일": task.planned_end_date.strftime("%Y-%m-%d") if task.planned_end_date else "",
                 "실제 완료일": task.actual_end_date.strftime("%Y-%m-%d") if task.actual_end_date else "",
-                "진행률(%)": task.progress_rate or 0,
+                "진행률(%)": task.progress_rate,
                 "생성일": task.created_at.strftime("%Y-%m-%d %H:%M:%S") if task.created_at else "",
                 "수정일": task.updated_at.strftime("%Y-%m-%d %H:%M:%S") if task.updated_at else "",
             }
@@ -282,7 +277,7 @@ def export_detailed_tasks_csv(
 
     # CSV 문자열 생성
     csv_buffer = StringIO()
-    df.to_csv(csv_buffer, index=False, encoding="utf-8-sig")  # BOM 추가로 한글 깨짐 방지
+    df.to_csv(csv_buffer, index=False, encoding="utf-8-sig")
     csv_content = csv_buffer.getvalue()
 
     # 파일명 생성

@@ -3,7 +3,8 @@ import WeeklyReportForm from './WeeklyReportForm';
 import WeeklyReportList from './WeeklyReportList';
 import DetailedTaskSheet from './DetailedTaskSheet';
 import SummaryViewer from './SummaryViewer';
-import { projectAPI } from '../services/api';
+import ProjectTimeline from './ProjectTimeline';
+import { projectAPI, summaryAPI } from '../services/api';
 
 const ProjectWorkspace = ({ refreshTrigger, onDataChange }) => {
   const [projects, setProjects] = useState([]);
@@ -11,10 +12,23 @@ const ProjectWorkspace = ({ refreshTrigger, onDataChange }) => {
   const [activeWorkspaceTab, setActiveWorkspaceTab] = useState('overview');
   const [editingReport, setEditingReport] = useState(null);
   const [fullscreenWorkspace, setFullscreenWorkspace] = useState(false);
+  const [projectStats, setProjectStats] = useState({
+    totalReports: 0,
+    completedTasks: 0,
+    totalTasks: 0,
+    avgProgress: 0,
+    loading: true
+  });
 
   useEffect(() => {
     fetchProjects();
   }, [refreshTrigger]);
+
+  useEffect(() => {
+    if (selectedProject) {
+      fetchProjectStats(selectedProject.name);
+    }
+  }, [selectedProject]);
 
   const fetchProjects = async () => {
     try {
@@ -36,6 +50,45 @@ const ProjectWorkspace = ({ refreshTrigger, onDataChange }) => {
     }
   };
 
+  const fetchProjectStats = async (projectName) => {
+    try {
+      setProjectStats(prev => ({ ...prev, loading: true }));
+      console.log('📊 프로젝트 통계 조회 시작:', projectName);
+      
+      const response = await summaryAPI.getEnhancedProjectSummary(projectName);
+      console.log('📈 통계 데이터:', response.data);
+      
+      if (response.data && response.data.found) {
+        const { weekly_summary, task_summary } = response.data;
+        
+        setProjectStats({
+          totalReports: weekly_summary.total_reports || 0,
+          completedTasks: task_summary.completed_tasks || 0,
+          totalTasks: task_summary.total_tasks || 0,
+          avgProgress: task_summary.avg_progress || 0,
+          loading: false
+        });
+      } else {
+        setProjectStats({
+          totalReports: 0,
+          completedTasks: 0,
+          totalTasks: 0,
+          avgProgress: 0,
+          loading: false
+        });
+      }
+    } catch (error) {
+      console.error('❌ 프로젝트 통계 로드 실패:', error);
+      setProjectStats({
+        totalReports: 0,
+        completedTasks: 0,
+        totalTasks: 0,
+        avgProgress: 0,
+        loading: false
+      });
+    }
+  };
+
   const handleProjectChange = (project) => {
     setSelectedProject(project);
     setEditingReport(null);
@@ -44,20 +97,21 @@ const ProjectWorkspace = ({ refreshTrigger, onDataChange }) => {
 
   const handleEditReport = (report) => {
     setEditingReport(report);
-    // 편집 시 보고서 탭으로 이동하여 인라인 편집
     setActiveWorkspaceTab('reports');
   };
 
   const handleSaveReport = () => {
     setEditingReport(null);
     onDataChange();
+    if (selectedProject) {
+      fetchProjectStats(selectedProject.name);
+    }
   };
 
   const handleCancelEdit = () => {
     setEditingReport(null);
   };
 
-  // ESC 키로 풀스크린 워크스페이스 종료
   useEffect(() => {
     const handleKeyDown = (event) => {
       if (event.key === 'Escape' && fullscreenWorkspace) {
@@ -103,15 +157,39 @@ const ProjectWorkspace = ({ refreshTrigger, onDataChange }) => {
               </h3>
               <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
                 <div className="bg-blue-50 p-4 rounded-lg">
-                  <div className="text-2xl font-bold text-blue-600">0</div>
+                  <div className="text-2xl font-bold text-blue-600">
+                    {projectStats.loading ? (
+                      <div className="animate-pulse">
+                        <div className="h-8 bg-blue-200 rounded w-8"></div>
+                      </div>
+                    ) : (
+                      projectStats.totalReports
+                    )}
+                  </div>
                   <div className="text-sm text-blue-800">총 보고서 수</div>
                 </div>
                 <div className="bg-green-50 p-4 rounded-lg">
-                  <div className="text-2xl font-bold text-green-600">0</div>
+                  <div className="text-2xl font-bold text-green-600">
+                    {projectStats.loading ? (
+                      <div className="animate-pulse">
+                        <div className="h-8 bg-green-200 rounded w-8"></div>
+                      </div>
+                    ) : (
+                      `${projectStats.completedTasks}/${projectStats.totalTasks}`
+                    )}
+                  </div>
                   <div className="text-sm text-green-800">완료된 업무</div>
                 </div>
                 <div className="bg-orange-50 p-4 rounded-lg">
-                  <div className="text-2xl font-bold text-orange-600">0%</div>
+                  <div className="text-2xl font-bold text-orange-600">
+                    {projectStats.loading ? (
+                      <div className="animate-pulse">
+                        <div className="h-8 bg-orange-200 rounded w-8"></div>
+                      </div>
+                    ) : (
+                      `${projectStats.avgProgress}%`
+                    )}
+                  </div>
                   <div className="text-sm text-orange-800">전체 진행률</div>
                 </div>
               </div>
@@ -141,7 +219,6 @@ const ProjectWorkspace = ({ refreshTrigger, onDataChange }) => {
               </button>
             </div>
             
-            {/* 편집 모드일 때 폼 표시 */}
             {editingReport !== null && (
               <div className="bg-white rounded-lg shadow mb-6">
                 <WeeklyReportForm
@@ -177,18 +254,12 @@ const ProjectWorkspace = ({ refreshTrigger, onDataChange }) => {
             <h3 className="text-lg font-semibold text-gray-900">
               📅 {selectedProject.name} 진행 타임라인
             </h3>
-            <div className="bg-white rounded-lg shadow p-6">
-              <div className="text-center py-12">
-                <div className="text-gray-400 text-6xl mb-4">📅</div>
-                <h4 className="text-lg font-medium text-gray-900 mb-2">타임라인 뷰</h4>
-                <p className="text-gray-500">프로젝트 진행 상황을 시간순으로 확인할 수 있습니다.</p>
-                <p className="text-sm text-gray-400 mt-2">향후 업데이트 예정</p>
-              </div>
-            </div>
+            <ProjectTimeline 
+              projectName={selectedProject.name} 
+              refreshTrigger={refreshTrigger}
+            />
           </div>
         );
-
-
 
       default:
         return null;
@@ -198,7 +269,6 @@ const ProjectWorkspace = ({ refreshTrigger, onDataChange }) => {
   return (
     <>
       <div className="space-y-6">
-        {/* 프로젝트 선택 헤더 */}
         <div className="bg-white rounded-lg shadow p-4">
           <div className="flex items-center justify-between">
             <div className="flex items-center space-x-4">
@@ -251,7 +321,6 @@ const ProjectWorkspace = ({ refreshTrigger, onDataChange }) => {
           </div>
         </div>
 
-        {/* 워크스페이스 탭 네비게이션 */}
         {selectedProject && (
           <div className="bg-white rounded-lg shadow">
             <div className="border-b border-gray-200">
@@ -281,11 +350,9 @@ const ProjectWorkspace = ({ refreshTrigger, onDataChange }) => {
         )}
       </div>
 
-      {/* 워크스페이스 풀스크린 모달 */}
       {fullscreenWorkspace && selectedProject && (
         <div className="fixed inset-0 bg-white z-50 overflow-auto">
           <div className="min-h-screen flex flex-col">
-            {/* 풀스크린 헤더 */}
             <div className="bg-white border-b border-gray-200 sticky top-0 z-10 flex-shrink-0">
               <div className="w-full px-4 sm:px-6 lg:px-8">
                 <div className="flex justify-between items-center py-4">
@@ -317,10 +384,8 @@ const ProjectWorkspace = ({ refreshTrigger, onDataChange }) => {
               </div>
             </div>
 
-            {/* 풀스크린 워크스페이스 콘텐츠 */}
             <div className="flex-1 w-full overflow-auto">
               <div className="w-full max-w-none">
-                {/* 워크스페이스 탭 네비게이션 */}
                 <div className="bg-white border-b border-gray-200 sticky top-0 z-10">
                   <div className="px-4 sm:px-6 lg:px-8">
                     <nav className="flex space-x-8">
@@ -344,7 +409,6 @@ const ProjectWorkspace = ({ refreshTrigger, onDataChange }) => {
                   </div>
                 </div>
 
-                {/* 워크스페이스 콘텐츠 */}
                 <div className="px-4 sm:px-6 lg:px-8 py-8">
                   {renderWorkspaceContent()}
                 </div>

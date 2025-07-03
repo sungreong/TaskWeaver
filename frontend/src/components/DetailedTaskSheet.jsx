@@ -54,30 +54,15 @@ const DetailedTaskSheet = () => {
     { value: 'cancelled', label: '취소', color: 'bg-red-200 text-red-700' }
   ];
 
-  // 데이터 로딩
+  // 데이터 로딩 - N+1 문제 해결
   const loadTasks = useCallback(async () => {
     setLoading(true);
     setError(null);
     try {
       const response = await detailedTaskAPI.getAllDetailedTasks(filters);
-      const tasksWithReports = await Promise.all(
-        response.data.map(async (task) => {
-          try {
-            const reportsResponse = await detailedTaskAPI.getTaskWeeklyReports(task.id);
-            return {
-              ...task,
-              linkedReports: reportsResponse.data
-            };
-          } catch (err) {
-            console.error(`Error loading reports for task ${task.id}:`, err);
-            return {
-              ...task,
-              linkedReports: []
-            };
-          }
-        })
-      );
-      setTasks(tasksWithReports);
+      
+      // 백엔드에서 이미 연결된 보고서 정보를 포함해서 보내주므로 추가 API 호출 불필요
+      setTasks(response.data);
     } catch (err) {
       setError('상세 업무 목록을 불러오는데 실패했습니다.');
       console.error('Error loading tasks:', err);
@@ -497,7 +482,7 @@ const DetailedTaskSheet = () => {
           >
             <option value="">전체 프로젝트</option>
             {projects.map(project => (
-              <option key={project} value={project}>{project}</option>
+              <option key={project.name} value={project.name}>{project.name}</option>
             ))}
           </select>
         </div>

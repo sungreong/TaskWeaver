@@ -541,8 +541,8 @@ const SummaryViewer = ({ refreshTrigger }) => {
               >
                 <option value="">프로젝트를 선택하세요</option>
                 {projects.map((project) => (
-                  <option key={project} value={project}>
-                    {project}
+                  <option key={project.name} value={project.name}>
+                    {project.name}
                   </option>
                 ))}
               </select>

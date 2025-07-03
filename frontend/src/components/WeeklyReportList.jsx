@@ -164,14 +164,26 @@ const WeeklyReportList = ({ refreshTrigger, onEdit, projectFilter, fullscreen = 
       setTasksLoading(prev => ({ ...prev, [reportId]: true }));
       const response = await detailedTaskAPI.getDetailedTasksByProjectAndStage(projectName, stage);
       
+      // 백엔드 응답 구조 변환: {stages: {...}} -> 평평한 배열
+      let tasksArray = [];
+      if (response.data && response.data.stages) {
+        // 모든 단계의 업무를 하나의 배열로 병합
+        tasksArray = Object.values(response.data.stages).flat();
+      } else if (Array.isArray(response.data)) {
+        // 이전 형태와 호환성 유지
+        tasksArray = response.data;
+      }
+      
       setDetailedTasks(prev => ({ 
         ...prev, 
-        [reportId]: response.data || [] 
+        [reportId]: tasksArray 
       }));
       
       // 이미 연결된 업무들 조회
       const linkedResponse = await detailedTaskAPI.getLinkedTasks(reportId);
-      const linkedTaskIds = linkedResponse.data.map(task => task.id);
+      const linkedTaskIds = Array.isArray(linkedResponse.data) 
+        ? linkedResponse.data.map(task => task.id)
+        : [];
       
       setSelectedTasks(prev => ({ 
         ...prev, 
@@ -745,7 +757,9 @@ const WeeklyReportList = ({ refreshTrigger, onEdit, projectFilter, fullscreen = 
 
   // 상세 업무 Multi-select 렌더링
   const renderDetailedTaskSelector = (report) => {
-    const reportTasks = detailedTasks[report.id] || [];
+    // 방어적 프로그래밍: 안전한 배열 처리
+    const taskData = detailedTasks[report.id];
+    const reportTasks = Array.isArray(taskData) ? taskData : [];
     const selectedTaskIds = selectedTasks[report.id] || [];
     const isExpanded = expandedTaskSelectors[report.id] || false;
     const isLoading = tasksLoading[report.id] || false;
@@ -804,7 +818,7 @@ const WeeklyReportList = ({ refreshTrigger, onEdit, projectFilter, fullscreen = 
               </div>
             ) : (
               <div className="divide-y divide-gray-100">
-                {reportTasks.map((task) => (
+                {Array.isArray(reportTasks) && reportTasks.map((task) => (
                   <label
                     key={task.id}
                     className="flex items-start gap-3 p-3 hover:bg-gray-50 cursor-pointer"
@@ -1234,8 +1248,10 @@ Enter: 자동 들여쓰기/리스트 계속"
               className="w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:ring-blue-500 focus:border-blue-500 text-sm"
             >
               <option value="">전체 프로젝트</option>
-              {filterOptions.projects.map(project => (
-                <option key={project} value={project}>{project}</option>
+                              {Array.isArray(filterOptions.projects) && filterOptions.projects.map(project => (
+                <option key={typeof project === 'string' ? project : project.name} value={typeof project === 'string' ? project : project.name}>
+                  {typeof project === 'string' ? project : project.name}
+                </option>
               ))}
             </select>
           </div>
@@ -1248,7 +1264,7 @@ Enter: 자동 들여쓰기/리스트 계속"
               className="w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:ring-blue-500 focus:border-blue-500 text-sm"
             >
               <option value="">전체 주차</option>
-              {filterOptions.weeks.map(week => (
+                              {Array.isArray(filterOptions.weeks) && filterOptions.weeks.map(week => (
                 <option key={week} value={week}>{week}</option>
               ))}
             </select>
@@ -1262,7 +1278,7 @@ Enter: 자동 들여쓰기/리스트 계속"
               className="w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:ring-blue-500 focus:border-blue-500 text-sm"
             >
               <option value="">전체 단계</option>
-              {filterOptions.stages.map(stage => (
+                              {Array.isArray(filterOptions.stages) && filterOptions.stages.map(stage => (
                 <option key={stage} value={stage}>{stage}</option>
               ))}
             </select>
@@ -1547,7 +1563,7 @@ Enter: 자동 들여쓰기/리스트 계속"
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-gray-200">
-                      {reports.map((report, index) => (
+                      {Array.isArray(reports) && reports.map((report, index) => (
                         <tr key={report.id} className={`hover:bg-blue-50 transition-all duration-200 ${index % 2 === 0 ? 'bg-white' : 'bg-gray-25'}`}>
                           {/* 주차 컬럼 */}
                           <td className="px-4 py-5 border-r border-gray-200" style={{ width: `${columnWidths.week}px` }}>
@@ -1669,7 +1685,7 @@ Enter: 자동 들여쓰기/리스트 계속"
           {/* 카드 뷰 */}
           {viewMode === 'card' && (
             <div className="space-y-4">
-              {reports.map((report) => (
+              {Array.isArray(reports) && reports.map((report) => (
                 <div
                   key={report.id}
                   className="border border-gray-200 rounded-lg p-6 hover:shadow-md transition-shadow"

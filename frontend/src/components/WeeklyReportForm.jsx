@@ -2,6 +2,7 @@ import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react'
 import { weeklyReportAPI, projectAPI, utilsAPI, detailedTaskAPI } from '../services/api';
 import MarkdownEditor from './MarkdownEditor';
 import DetailedTaskFormModal from './DetailedTaskFormModal';
+import ProjectFormModal from './ProjectFormModal';
 
 const WeeklyReportForm = ({ editingReport, onSave, onCancel, defaultProject, fullscreen = false }) => {
   const [loading, setLoading] = useState(false);
@@ -16,6 +17,9 @@ const WeeklyReportForm = ({ editingReport, onSave, onCancel, defaultProject, ful
   
   // 상세 업무 추가 모달 상태
   const [showTaskModal, setShowTaskModal] = useState(false);
+  
+  // 프로젝트 추가 모달 상태
+  const [showProjectModal, setShowProjectModal] = useState(false);
   
   // API 호출 중복 방지를 위한 ref
   const isProjectNamesFetched = useRef(false);
@@ -163,14 +167,10 @@ const WeeklyReportForm = ({ editingReport, onSave, onCancel, defaultProject, ful
     const value = e.target.value;
     
     if (value === '__NEW_PROJECT__') {
-      setIsNewProject(true);
-      setFormData(prev => ({
-        ...prev,
-        project: '',
-        detailed_task_ids: []
-      }));
-      setSelectedTaskIds([]);
-      setAvailableTasks([]);
+      // 모달 열기
+      handleOpenProjectModal();
+      // select 박스를 원래 상태로 되돌림
+      e.target.value = formData.project;
     } else {
       setIsNewProject(false);
       setFormData(prev => ({
@@ -196,6 +196,33 @@ const WeeklyReportForm = ({ editingReport, onSave, onCancel, defaultProject, ful
       ...prev,
       project: ''
     }));
+  };
+
+  // 프로젝트 생성 모달 열기
+  const handleOpenProjectModal = () => {
+    setShowProjectModal(true);
+  };
+
+  // 프로젝트 생성 성공 콜백
+  const handleProjectCreated = async () => {
+    // 프로젝트 목록 새로고침
+    isProjectNamesFetched.current = false; // 재조회 플래그 리셋
+    await fetchProjectNames();
+    
+    // 새로 생성된 프로젝트를 자동 선택하기 위해 잠시 기다림
+    setTimeout(async () => {
+      const response = await projectAPI.getProjectNames();
+      const latestProject = response.data[response.data.length - 1]; // 가장 최근 프로젝트
+      if (latestProject) {
+        setFormData(prev => ({
+          ...prev,
+          project: latestProject
+        }));
+        setIsNewProject(false);
+        // 새 프로젝트의 상세 업무 로드
+        fetchDetailedTasks(latestProject);
+      }
+    }, 100);
   };
 
   // 현재 주차 설정
@@ -359,7 +386,7 @@ const WeeklyReportForm = ({ editingReport, onSave, onCancel, defaultProject, ful
               </label>
               <button
                 type="button"
-                onClick={toggleProjectMode}
+                onClick={isNewProject ? toggleProjectMode : handleOpenProjectModal}
                 className="text-sm text-blue-600 hover:text-blue-800 font-medium"
               >
                 {isNewProject ? '기존 프로젝트 선택' : '신규 프로젝트 추가'}
@@ -704,6 +731,14 @@ const WeeklyReportForm = ({ editingReport, onSave, onCancel, defaultProject, ful
         onSave={handleNewTaskSaved}
         defaultProject={formData.project}
         defaultStage={formData.stage}
+      />
+
+      {/* 프로젝트 추가 모달 */}
+      <ProjectFormModal
+        isOpen={showProjectModal}
+        onClose={() => setShowProjectModal(false)}
+        onSuccess={handleProjectCreated}
+        title="신규 프로젝트 추가"
       />
     </div>
   );

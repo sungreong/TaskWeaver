@@ -1,22 +1,23 @@
-from fastapi import APIRouter, Depends
-from sqlalchemy.orm import Session
-from sqlalchemy import func, distinct, desc, and_
-from typing import List, Dict, Any, Optional
+from fastapi import APIRouter, Depends, HTTPException
+from sqlalchemy.orm import Session, joinedload
+from sqlalchemy import desc, func, distinct, and_, case, or_
 from database import get_db
-from models import WeeklyReportDB, ProjectSummary, DetailedTaskDB, TaskStatus
+from models import WeeklyReportDB, DetailedTaskDB, ProjectDB, TaskStatus
+from typing import List, Dict, Any, Optional
+import logging
 
 router = APIRouter(prefix="/summary", tags=["summary"])
+logger = logging.getLogger(__name__)
 
 
-# 프로젝트 목록 조회
 @router.get("/projects")
 def get_projects(db: Session = Depends(get_db)):
     """모든 프로젝트 목록을 조회합니다."""
-    projects = db.query(distinct(WeeklyReportDB.project)).all()
-    return [project[0] for project in projects]
+    # ProjectDB 테이블에서 직접 조회
+    projects = db.query(ProjectDB).all()
+    return [{"name": project.name, "id": project.id} for project in projects]
 
 
-# 주차 목록 조회
 @router.get("/weeks")
 def get_weeks(db: Session = Depends(get_db)):
     """모든 주차 목록을 조회합니다."""
@@ -24,7 +25,6 @@ def get_weeks(db: Session = Depends(get_db)):
     return [week[0] for week in weeks]
 
 
-# 단계 목록 조회
 @router.get("/stages")
 def get_stages(db: Session = Depends(get_db)):
     """모든 단계 목록을 조회합니다."""
@@ -32,85 +32,74 @@ def get_stages(db: Session = Depends(get_db)):
     return [stage[0] for stage in stages]
 
 
-# 프로젝트별 요약 정보
 @router.get("/project/{project_name}")
 def get_project_summary(project_name: str, db: Session = Depends(get_db)):
     """특정 프로젝트의 요약 정보를 조회합니다."""
 
-    # 프로젝트의 모든 보고서 조회
+    # ProjectDB에서 프로젝트 조회
+    project = db.query(ProjectDB).filter(ProjectDB.name == project_name).first()
+    if not project:
+        raise HTTPException(status_code=404, detail="프로젝트를 찾을 수 없습니다.")
+
+    # 관련된 보고서들 조회 (relationship 사용)
     reports = (
         db.query(WeeklyReportDB)
-        .filter(WeeklyReportDB.project == project_name)
-        .order_by(desc(WeeklyReportDB.week))
+        .options(joinedload(WeeklyReportDB.project_obj))
+        .filter(WeeklyReportDB.project_id == project.id)
+        .order_by(WeeklyReportDB.week)
         .all()
     )
 
     if not reports:
         return {
-            "project": project_name,
+            "project_name": project_name,
             "total_weeks": 0,
             "latest_week": None,
-            "stages": [],
             "current_issues": 0,
             "completion_rate": 0.0,
-            "recent_updates": [],
+            "stages": [],
+            "report_count": 0,
+            "weeks": [],
         }
 
-    # 통계 계산
-    total_weeks = len(set(report.week for report in reports))
-    latest_week = max(report.week for report in reports)
+    # 기본 통계 계산
+    weeks = list(set(report.week for report in reports))
+    total_weeks = len(weeks)
+    latest_week = max(weeks)
     stages = list(set(report.stage for report in reports))
+    current_issues = len([report for report in reports if report.issues_risks and report.issues_risks.strip()])
 
-    # 이슈가 있는 보고서 수 계산
-    current_issues = len([r for r in reports if r.issues_risks and r.issues_risks.strip()])
+    # 완료율 계산 (간단한 휴리스틱)
+    completed_reports = 0
+    for report in reports:
+        if report.next_week_plan:
+            next_plan_lower = report.next_week_plan.lower()
+            if any(keyword in next_plan_lower for keyword in ["완료", "종료", "마무리", "끝", "finish", "complete"]):
+                completed_reports += 1
 
-    # 완료율 계산 (예시: 다음 주 계획이 비어있거나 "완료"라는 키워드가 있으면 완료로 간주)
-    completed_reports = len(
-        [
-            r
-            for r in reports
-            if not r.next_week_plan
-            or "완료" in r.next_week_plan
-            or "종료" in r.next_week_plan
-            or "마무리" in r.next_week_plan
-        ]
-    )
     completion_rate = (completed_reports / len(reports)) * 100 if reports else 0
 
-    # 최근 업데이트 (최근 3개)
-    recent_updates = []
-    for report in reports[:3]:
-        recent_updates.append(
-            {
-                "week": report.week,
-                "stage": report.stage,
-                "this_week_work": (
-                    report.this_week_work[:100] + "..." if len(report.this_week_work) > 100 else report.this_week_work
-                ),
-                "updated_at": report.updated_at.isoformat() if report.updated_at else "",
-            }
-        )
-
     return {
-        "project": project_name,
+        "project_name": project_name,
         "total_weeks": total_weeks,
         "latest_week": latest_week,
-        "stages": stages,
         "current_issues": current_issues,
         "completion_rate": round(completion_rate, 1),
-        "recent_updates": recent_updates,
+        "stages": stages,
+        "report_count": len(reports),
+        "weeks": sorted(weeks, reverse=True),
     }
 
 
-# 주차별 전체 요약
 @router.get("/week/{week}")
 def get_week_summary(week: str, db: Session = Depends(get_db)):
-    """특정 주차의 모든 프로젝트 요약을 조회합니다."""
+    """특정 주차의 요약 정보를 조회합니다."""
 
     reports = (
         db.query(WeeklyReportDB)
+        .options(joinedload(WeeklyReportDB.project_obj))
         .filter(WeeklyReportDB.week == week)
-        .order_by(WeeklyReportDB.project, WeeklyReportDB.stage)
+        .order_by(WeeklyReportDB.project_obj.name, WeeklyReportDB.stage)
         .all()
     )
 
@@ -120,71 +109,63 @@ def get_week_summary(week: str, db: Session = Depends(get_db)):
             "total_projects": 0,
             "total_stages": 0,
             "projects_with_issues": 0,
-            "project_summaries": [],
+            "total_issues": 0,
+            "project_list": [],
         }
 
     # 프로젝트별 그룹핑
     project_groups = {}
     for report in reports:
-        if report.project not in project_groups:
-            project_groups[report.project] = []
-        project_groups[report.project].append(report)
+        project_name = report.project_obj.name
+        if project_name not in project_groups:
+            project_groups[project_name] = []
+        project_groups[project_name].append(report)
 
-    project_summaries = []
+    # 통계 계산
+    total_projects = len(project_groups)
+    total_stages = len(reports)
     projects_with_issues = 0
+    total_issues = 0
 
-    for project, project_reports in project_groups.items():
+    for project_name, project_reports in project_groups.items():
         has_issues = any(r.issues_risks and r.issues_risks.strip() for r in project_reports)
         if has_issues:
             projects_with_issues += 1
-
-        project_summaries.append(
-            {
-                "project": project,
-                "stages": [r.stage for r in project_reports],
-                "has_issues": has_issues,
-                "total_stages": len(project_reports),
-            }
-        )
+        total_issues += len([r for r in project_reports if r.issues_risks and r.issues_risks.strip()])
 
     return {
         "week": week,
-        "total_projects": len(project_groups),
-        "total_stages": len(reports),
+        "total_projects": total_projects,
+        "total_stages": total_stages,
         "projects_with_issues": projects_with_issues,
-        "project_summaries": project_summaries,
+        "total_issues": total_issues,
+        "project_list": list(project_groups.keys()),
     }
 
 
-# 전체 대시보드 요약
 @router.get("/dashboard")
 def get_dashboard_summary(db: Session = Depends(get_db)):
     """전체 대시보드 요약 정보를 조회합니다."""
 
-    # 전체 통계
+    # 기본 통계
+    total_projects = db.query(ProjectDB).count()
     total_reports = db.query(WeeklyReportDB).count()
-    total_projects = db.query(distinct(WeeklyReportDB.project)).count()
     total_weeks = db.query(distinct(WeeklyReportDB.week)).count()
 
-    # 최근 주차
-    latest_week_result = db.query(WeeklyReportDB.week).order_by(desc(WeeklyReportDB.week)).first()
-    latest_week = latest_week_result[0] if latest_week_result else None
-
-    # 이슈가 있는 보고서 수
-    reports_with_issues = (
+    # 최근 업데이트 (프로젝트명 포함)
+    recent_reports = (
         db.query(WeeklyReportDB)
-        .filter(WeeklyReportDB.issues_risks.isnot(None), WeeklyReportDB.issues_risks != "")
-        .count()
+        .options(joinedload(WeeklyReportDB.project_obj))
+        .order_by(desc(WeeklyReportDB.updated_at))
+        .limit(5)
+        .all()
     )
 
-    # 최근 업데이트된 보고서들
-    recent_reports = db.query(WeeklyReportDB).order_by(desc(WeeklyReportDB.updated_at)).limit(5).all()
-
-    recent_activities = []
+    recent_updates = []
     for report in recent_reports:
-        recent_activities.append(
+        recent_updates.append(
             {
-                "project": report.project,
+                "project": report.project_obj.name,
                 "week": report.week,
                 "stage": report.stage,
                 "updated_at": report.updated_at.isoformat() if report.updated_at else "",
@@ -192,23 +173,19 @@ def get_dashboard_summary(db: Session = Depends(get_db)):
         )
 
     return {
-        "total_reports": total_reports,
         "total_projects": total_projects,
+        "total_reports": total_reports,
         "total_weeks": total_weeks,
-        "latest_week": latest_week,
-        "reports_with_issues": reports_with_issues,
-        "recent_activities": recent_activities,
+        "recent_updates": recent_updates,
     }
 
 
-# 🆕 상세 업무 포함 종합 대시보드
 @router.get("/enhanced-dashboard")
 def get_enhanced_dashboard(db: Session = Depends(get_db)):
     """상세 업무 시트 데이터까지 포함한 종합 대시보드 정보를 조회합니다."""
 
-    # 기존 주간 보고서 통계
     total_reports = db.query(WeeklyReportDB).count()
-    total_projects_from_reports = db.query(distinct(WeeklyReportDB.project)).count()
+    total_projects_from_reports = db.query(distinct(WeeklyReportDB.project_id)).count()
     total_weeks = db.query(distinct(WeeklyReportDB.week)).count()
     reports_with_issues = (
         db.query(WeeklyReportDB)
@@ -216,17 +193,14 @@ def get_enhanced_dashboard(db: Session = Depends(get_db)):
         .count()
     )
 
-    # 상세 업무 통계
     total_detailed_tasks = db.query(DetailedTaskDB).count()
-    total_projects_from_tasks = db.query(distinct(DetailedTaskDB.project)).count()
+    total_projects_from_tasks = db.query(distinct(DetailedTaskDB.project_id)).count()
 
-    # 상세 업무 상태별 통계
     task_status_stats = {}
     for status in TaskStatus:
         count = db.query(DetailedTaskDB).filter(DetailedTaskDB.current_status == status).count()
         task_status_stats[status.value] = count
 
-    # 진행률별 통계
     progress_stats = {
         "not_started": db.query(DetailedTaskDB).filter(DetailedTaskDB.progress_rate == 0).count(),
         "in_progress": db.query(DetailedTaskDB)
@@ -235,14 +209,11 @@ def get_enhanced_dashboard(db: Session = Depends(get_db)):
         "completed": db.query(DetailedTaskDB).filter(DetailedTaskDB.progress_rate == 100).count(),
     }
 
-    # 리스크 있는 업무 수
     tasks_with_risk = db.query(DetailedTaskDB).filter(DetailedTaskDB.has_risk == True).count()
 
-    # 평균 진행률
     avg_progress_result = db.query(func.avg(DetailedTaskDB.progress_rate)).scalar()
     avg_progress = round(avg_progress_result, 1) if avg_progress_result else 0.0
 
-    # 담당자별 업무 분포
     assignee_stats = (
         db.query(
             DetailedTaskDB.assignee,
@@ -266,50 +237,56 @@ def get_enhanced_dashboard(db: Session = Depends(get_db)):
             }
         )
 
-    # 프로젝트별 업무 현황 (상위 5개)
-    # 프로젝트별 기본 통계
+    # 프로젝트별 기본 통계 (관계 활용)
     project_basic_stats = (
         db.query(
-            DetailedTaskDB.project,
+            ProjectDB.name,
             func.count(DetailedTaskDB.id).label("total_tasks"),
             func.avg(DetailedTaskDB.progress_rate).label("avg_progress"),
         )
-        .group_by(DetailedTaskDB.project)
+        .join(DetailedTaskDB, ProjectDB.id == DetailedTaskDB.project_id)
+        .group_by(ProjectDB.name)
         .order_by(desc("total_tasks"))
         .limit(5)
         .all()
     )
 
-    # 프로젝트별 리스크 업무 수 별도 계산 (SQLAlchemy 호환성 보장)
     project_risk_stats = {}
-    for project, _, _ in project_basic_stats:
+    for project_name, _, _ in project_basic_stats:
         risk_count = (
             db.query(func.count(DetailedTaskDB.id))
-            .filter(DetailedTaskDB.project == project)
+            .join(ProjectDB, ProjectDB.id == DetailedTaskDB.project_id)
+            .filter(ProjectDB.name == project_name)
             .filter(DetailedTaskDB.has_risk == True)
             .scalar()
         ) or 0
-        project_risk_stats[project] = risk_count
+        project_risk_stats[project_name] = risk_count
 
     project_overview = []
-    for project, total_tasks, avg_progress in project_basic_stats:
+    for project_name, total_tasks, avg_progress in project_basic_stats:
         project_overview.append(
             {
-                "project": project,
+                "project": project_name,
                 "total_tasks": total_tasks,
                 "avg_progress": round(avg_progress, 1) if avg_progress else 0.0,
-                "risk_tasks": project_risk_stats.get(project, 0),
+                "risk_tasks": project_risk_stats.get(project_name, 0),
             }
         )
 
-    # 최근 업데이트된 상세 업무들
-    recent_task_updates = db.query(DetailedTaskDB).order_by(desc(DetailedTaskDB.updated_at)).limit(5).all()
+    # 최근 업무 업데이트 (프로젝트명 포함)
+    recent_task_updates = (
+        db.query(DetailedTaskDB)
+        .options(joinedload(DetailedTaskDB.project_obj))
+        .order_by(desc(DetailedTaskDB.updated_at))
+        .limit(5)
+        .all()
+    )
 
     recent_task_activities = []
     for task in recent_task_updates:
         recent_task_activities.append(
             {
-                "project": task.project,
+                "project": task.project_obj.name,
                 "task_item": task.task_item,
                 "assignee": task.assignee,
                 "current_status": task.current_status.value if task.current_status else None,
@@ -319,7 +296,6 @@ def get_enhanced_dashboard(db: Session = Depends(get_db)):
         )
 
     return {
-        # 전체 통계
         "overview": {
             "total_projects": max(total_projects_from_reports, total_projects_from_tasks),
             "total_reports": total_reports,
@@ -329,43 +305,40 @@ def get_enhanced_dashboard(db: Session = Depends(get_db)):
             "tasks_with_risk": tasks_with_risk,
             "avg_task_progress": avg_progress,
         },
-        # 상세 업무 통계
         "task_statistics": {
             "status_distribution": task_status_stats,
             "progress_distribution": progress_stats,
             "assignee_distribution": assignee_distribution,
             "project_overview": project_overview,
         },
-        # 최근 활동
         "recent_activities": {"task_updates": recent_task_activities},
     }
 
 
-# 🆕 프로젝트별 상세 현황 (주간 보고서 + 상세 업무 통합)
 @router.get("/project/{project_name}/enhanced")
 def get_enhanced_project_summary(project_name: str, db: Session = Depends(get_db)):
     """특정 프로젝트의 주간 보고서와 상세 업무를 통합한 요약 정보를 조회합니다."""
 
-    # 기존 주간 보고서 통계
+    # 프로젝트 확인
+    project = db.query(ProjectDB).filter(ProjectDB.name == project_name).first()
+    if not project:
+        return {"project": project_name, "found": False, "message": "해당 프로젝트를 찾을 수 없습니다."}
+
+    # 프로젝트 ID로 데이터 조회
     reports = (
-        db.query(WeeklyReportDB)
-        .filter(WeeklyReportDB.project == project_name)
-        .order_by(desc(WeeklyReportDB.week))
-        .all()
+        db.query(WeeklyReportDB).filter(WeeklyReportDB.project_id == project.id).order_by(WeeklyReportDB.week).all()
     )
 
-    # 상세 업무 통계
     detailed_tasks = (
         db.query(DetailedTaskDB)
-        .filter(DetailedTaskDB.project == project_name)
-        .order_by(desc(DetailedTaskDB.updated_at))
+        .filter(DetailedTaskDB.project_id == project.id)
+        .order_by(DetailedTaskDB.planned_end_date, DetailedTaskDB.created_at)
         .all()
     )
 
     if not reports and not detailed_tasks:
         return {"project": project_name, "found": False, "message": "해당 프로젝트의 데이터를 찾을 수 없습니다."}
 
-    # 주간 보고서 요약
     weekly_summary = {
         "total_weeks": len(set(r.week for r in reports)) if reports else 0,
         "latest_week": max(r.week for r in reports) if reports else None,
@@ -374,7 +347,6 @@ def get_enhanced_project_summary(project_name: str, db: Session = Depends(get_db
         "total_reports": len(reports),
     }
 
-    # 상세 업무 요약
     task_summary = {
         "total_tasks": len(detailed_tasks),
         "completed_tasks": len([t for t in detailed_tasks if t.progress_rate >= 100]),
@@ -386,7 +358,6 @@ def get_enhanced_project_summary(project_name: str, db: Session = Depends(get_db
         ),
     }
 
-    # 담당자별 업무 현황
     assignee_tasks = {}
     for task in detailed_tasks:
         if task.assignee:
@@ -411,15 +382,13 @@ def get_enhanced_project_summary(project_name: str, db: Session = Depends(get_db
             if task.has_risk:
                 assignee_tasks[task.assignee]["with_risk"] += 1
 
-    # 평균 진행률 계산
     for assignee in assignee_tasks:
         if assignee_tasks[assignee]["total"] > 0:
             assignee_tasks[assignee]["avg_progress"] = round(
                 assignee_tasks[assignee]["progress_sum"] / assignee_tasks[assignee]["total"], 1
             )
-        del assignee_tasks[assignee]["progress_sum"]  # 임시 필드 제거
+        del assignee_tasks[assignee]["progress_sum"]
 
-    # 단계별 업무 현황
     stage_tasks = {}
     for task in detailed_tasks:
         if task.stage:
@@ -432,27 +401,10 @@ def get_enhanced_project_summary(project_name: str, db: Session = Depends(get_db
             if task.has_risk:
                 stage_tasks[task.stage]["with_risk"] += 1
 
-    # 단계별 평균 진행률 계산
     for stage in stage_tasks:
-        stage_task_list = [t for t in detailed_tasks if t.stage == stage]
-        if stage_task_list:
-            stage_tasks[stage]["avg_progress"] = round(
-                sum(t.progress_rate for t in stage_task_list) / len(stage_task_list), 1
-            )
-
-    # 최근 업무 활동
-    recent_task_activities = []
-    for task in detailed_tasks[:5]:  # 최근 5개
-        recent_task_activities.append(
-            {
-                "task_item": task.task_item,
-                "assignee": task.assignee,
-                "current_status": task.current_status.value if task.current_status else None,
-                "progress_rate": task.progress_rate,
-                "has_risk": task.has_risk,
-                "updated_at": task.updated_at.isoformat() if task.updated_at else "",
-            }
-        )
+        stage_progress = [t.progress_rate for t in detailed_tasks if t.stage == stage]
+        if stage_progress:
+            stage_tasks[stage]["avg_progress"] = round(sum(stage_progress) / len(stage_progress), 1)
 
     return {
         "project": project_name,
@@ -461,54 +413,29 @@ def get_enhanced_project_summary(project_name: str, db: Session = Depends(get_db
         "task_summary": task_summary,
         "assignee_breakdown": assignee_tasks,
         "stage_breakdown": stage_tasks,
-        "recent_task_activities": recent_task_activities,
     }
 
 
-# 🆕 담당자별 업무 현황
 @router.get("/assignee/{assignee_name}")
 def get_assignee_summary(assignee_name: str, db: Session = Depends(get_db)):
-    """특정 담당자의 모든 업무 현황을 조회합니다."""
+    """특정 담당자의 업무 요약 정보를 조회합니다."""
 
+    # 담당자의 모든 업무 조회
     tasks = (
         db.query(DetailedTaskDB)
+        .options(joinedload(DetailedTaskDB.project_obj))
         .filter(DetailedTaskDB.assignee == assignee_name)
-        .order_by(desc(DetailedTaskDB.updated_at))
         .all()
     )
 
     if not tasks:
-        return {"assignee": assignee_name, "found": False, "message": "해당 담당자의 업무를 찾을 수 없습니다."}
+        return {
+            "assignee": assignee_name,
+            "found": False,
+            "message": f"담당자 '{assignee_name}'의 업무를 찾을 수 없습니다.",
+        }
 
-    # 프로젝트별 업무 분포
-    project_distribution = {}
-    for task in tasks:
-        if task.project not in project_distribution:
-            project_distribution[task.project] = {
-                "total": 0,
-                "completed": 0,
-                "in_progress": 0,
-                "with_risk": 0,
-                "avg_progress": 0.0,
-            }
-
-        project_distribution[task.project]["total"] += 1
-        if task.progress_rate >= 100:
-            project_distribution[task.project]["completed"] += 1
-        elif task.progress_rate > 0:
-            project_distribution[task.project]["in_progress"] += 1
-        if task.has_risk:
-            project_distribution[task.project]["with_risk"] += 1
-
-    # 프로젝트별 평균 진행률 계산
-    for project in project_distribution:
-        project_tasks = [t for t in tasks if t.project == project]
-        if project_tasks:
-            project_distribution[project]["avg_progress"] = round(
-                sum(t.progress_rate for t in project_tasks) / len(project_tasks), 1
-            )
-
-    # 전체 통계
+    # 기본 통계
     total_tasks = len(tasks)
     completed_tasks = len([t for t in tasks if t.progress_rate >= 100])
     in_progress_tasks = len([t for t in tasks if 0 < t.progress_rate < 100])
@@ -516,34 +443,269 @@ def get_assignee_summary(assignee_name: str, db: Session = Depends(get_db)):
     tasks_with_risk = len([t for t in tasks if t.has_risk])
     avg_progress = round(sum(t.progress_rate for t in tasks) / total_tasks, 1) if tasks else 0.0
 
-    # 최근 업무 목록
-    recent_tasks = []
-    for task in tasks[:10]:  # 최근 10개
-        recent_tasks.append(
-            {
-                "project": task.project,
-                "stage": task.stage,
-                "task_item": task.task_item,
-                "current_status": task.current_status.value if task.current_status else None,
-                "progress_rate": task.progress_rate,
-                "has_risk": task.has_risk,
-                "planned_end_date": task.planned_end_date.strftime("%Y-%m-%d") if task.planned_end_date else None,
-                "updated_at": task.updated_at.isoformat() if task.updated_at else "",
+    # 프로젝트별 분류
+    project_breakdown = {}
+    for task in tasks:
+        project_name = task.project_obj.name
+        if project_name not in project_breakdown:
+            project_breakdown[project_name] = {
+                "total": 0,
+                "completed": 0,
+                "in_progress": 0,
+                "with_risk": 0,
+                "avg_progress": 0.0,
             }
-        )
+
+        project_breakdown[project_name]["total"] += 1
+        if task.progress_rate >= 100:
+            project_breakdown[project_name]["completed"] += 1
+        elif task.progress_rate > 0:
+            project_breakdown[project_name]["in_progress"] += 1
+        if task.has_risk:
+            project_breakdown[project_name]["with_risk"] += 1
+
+    for project_name in project_breakdown:
+        project_tasks = [t for t in tasks if t.project_obj.name == project_name]
+        if project_tasks:
+            project_breakdown[project_name]["avg_progress"] = round(
+                sum(t.progress_rate for t in project_tasks) / len(project_tasks), 1
+            )
+
+    # 상태별 분류
+    status_breakdown = {}
+    for task in tasks:
+        status = task.current_status.value
+        if status not in status_breakdown:
+            status_breakdown[status] = 0
+        status_breakdown[status] += 1
 
     return {
         "assignee": assignee_name,
         "found": True,
-        "overview": {
+        "summary": {
             "total_tasks": total_tasks,
             "completed_tasks": completed_tasks,
             "in_progress_tasks": in_progress_tasks,
             "not_started_tasks": not_started_tasks,
             "tasks_with_risk": tasks_with_risk,
             "avg_progress": avg_progress,
-            "total_projects": len(project_distribution),
         },
-        "project_distribution": project_distribution,
-        "recent_tasks": recent_tasks,
+        "project_breakdown": project_breakdown,
+        "status_breakdown": status_breakdown,
+    }
+
+
+@router.get("/project/{project_name}/timeline")
+def get_project_timeline(project_name: str, db: Session = Depends(get_db)):
+    """프로젝트의 완전한 타임라인 정보를 조회합니다."""
+
+    # 프로젝트 확인
+    project = db.query(ProjectDB).filter(ProjectDB.name == project_name).first()
+    if not project:
+        raise HTTPException(status_code=404, detail="프로젝트를 찾을 수 없습니다.")
+
+    # 모든 관련 데이터 조회
+    reports = db.query(WeeklyReportDB).filter(WeeklyReportDB.project_id == project.id).all()
+    all_tasks = db.query(DetailedTaskDB).filter(DetailedTaskDB.project_id == project.id).all()
+
+    # 통합 타임라인 이벤트 생성
+    timeline_events = []
+
+    # 1. 프로젝트 생성 이벤트
+    timeline_events.append(
+        {
+            "type": "project",
+            "title": f"프로젝트 '{project.name}' 생성",
+            "description": project.description or "새로운 프로젝트가 생성되었습니다.",
+            "date": project.created_at.isoformat(),
+            "icon": "🚀",
+            "color": "purple",
+            "details": {
+                "project_name": project.name,
+                "manager": project.manager,
+                "status": project.status.value if project.status else None,
+                "priority": project.priority.value if project.priority else None,
+                "start_date": project.start_date.isoformat() if project.start_date else None,
+                "end_date": project.end_date.isoformat() if project.end_date else None,
+            },
+        }
+    )
+
+    # 2. 프로젝트 수정 이벤트 (생성 시간과 다른 경우)
+    if project.updated_at and project.updated_at != project.created_at:
+        timeline_events.append(
+            {
+                "type": "project",
+                "title": f"프로젝트 '{project.name}' 수정",
+                "description": "프로젝트 정보가 수정되었습니다.",
+                "date": project.updated_at.isoformat(),
+                "icon": "✏️",
+                "color": "blue",
+                "details": {
+                    "project_name": project.name,
+                    "manager": project.manager,
+                    "status": project.status.value if project.status else None,
+                    "priority": project.priority.value if project.priority else None,
+                },
+            }
+        )
+
+    # 3. 주간 보고서 생성 이벤트
+    for report in reports:
+        timeline_events.append(
+            {
+                "type": "report",
+                "title": f"{report.week} 주간 보고서 작성",
+                "description": (
+                    f"[{report.stage}] {report.this_week_work[:50]}..."
+                    if len(report.this_week_work) > 50
+                    else f"[{report.stage}] {report.this_week_work}"
+                ),
+                "date": report.created_at.isoformat(),
+                "icon": "📋",
+                "color": "red" if report.issues_risks and report.issues_risks.strip() else "blue",
+                "details": {
+                    "week": report.week,
+                    "stage": report.stage,
+                    "this_week_work": report.this_week_work,
+                    "next_week_plan": report.next_week_plan,
+                    "issues_risks": report.issues_risks,
+                    "action": "생성",
+                },
+            }
+        )
+
+        # 4. 주간 보고서 수정 이벤트 (생성 시간과 다른 경우)
+        if report.updated_at and report.updated_at != report.created_at:
+            timeline_events.append(
+                {
+                    "type": "report",
+                    "title": f"{report.week} 주간 보고서 수정",
+                    "description": f"[{report.stage}] 보고서가 수정되었습니다.",
+                    "date": report.updated_at.isoformat(),
+                    "icon": "✏️",
+                    "color": "orange",
+                    "details": {"week": report.week, "stage": report.stage, "action": "수정"},
+                }
+            )
+
+    # 5. 상세 업무 생성 이벤트
+    for task in all_tasks:
+        timeline_events.append(
+            {
+                "type": "task",
+                "title": f"업무 '{task.task_item}' 생성",
+                "description": f"[{task.assignee or '미지정'}] {task.stage or '일반'} 단계",
+                "date": task.created_at.isoformat(),
+                "icon": "📝",
+                "color": "gray",
+                "details": {
+                    "task_item": task.task_item,
+                    "assignee": task.assignee,
+                    "stage": task.stage,
+                    "current_status": task.current_status.value if task.current_status else None,
+                    "progress_rate": task.progress_rate,
+                    "action": "생성",
+                },
+            }
+        )
+
+        # 6. 상세 업무 수정 이벤트 (생성 시간과 다른 경우)
+        if task.updated_at and task.updated_at != task.created_at:
+            timeline_events.append(
+                {
+                    "type": "task",
+                    "title": f"업무 '{task.task_item}' 수정",
+                    "description": f"[{task.assignee or '미지정'}] 진행률 {task.progress_rate}%",
+                    "date": task.updated_at.isoformat(),
+                    "icon": "📊",
+                    "color": "orange",
+                    "details": {
+                        "task_item": task.task_item,
+                        "assignee": task.assignee,
+                        "current_status": task.current_status.value if task.current_status else None,
+                        "progress_rate": task.progress_rate,
+                        "has_risk": task.has_risk,
+                        "action": "수정",
+                    },
+                }
+            )
+
+        # 7. 상세 업무 완료 이벤트 (실제 완료일이 있는 경우)
+        if task.actual_end_date:
+            timeline_events.append(
+                {
+                    "type": "milestone",
+                    "title": f"업무 '{task.task_item}' 완료",
+                    "description": f"[{task.assignee or '미지정'}] 업무가 완료되었습니다.",
+                    "date": task.actual_end_date.isoformat(),
+                    "icon": "✅",
+                    "color": "green",
+                    "details": {
+                        "task_item": task.task_item,
+                        "assignee": task.assignee,
+                        "actual_end_date": task.actual_end_date.isoformat(),
+                        "progress_rate": task.progress_rate,
+                        "action": "완료",
+                    },
+                }
+            )
+
+        # 8. 리스크 발생 이벤트 (리스크가 있는 경우)
+        if task.has_risk:
+            timeline_events.append(
+                {
+                    "type": "risk",
+                    "title": f"리스크 발생: {task.task_item}",
+                    "description": f"[{task.assignee or '미지정'}] 업무에 리스크가 발생했습니다.",
+                    "date": task.updated_at.isoformat(),  # 리스크는 수정 시점에 발생했다고 가정
+                    "icon": "⚠️",
+                    "color": "red",
+                    "details": {
+                        "task_item": task.task_item,
+                        "assignee": task.assignee,
+                        "current_status": task.current_status.value if task.current_status else None,
+                        "progress_rate": task.progress_rate,
+                        "action": "리스크 발생",
+                    },
+                }
+            )
+
+    # 날짜순 정렬
+    timeline_events.sort(key=lambda x: x["date"])
+
+    # 통계 계산
+    completed_tasks = len([t for t in all_tasks if t.progress_rate >= 100])
+    issues_count = len([r for r in reports if r.issues_risks and r.issues_risks.strip()]) + len(
+        [t for t in all_tasks if t.has_risk]
+    )
+
+    # 날짜 범위 계산
+    dates = [event["date"] for event in timeline_events]
+    date_range = {"start": min(dates) if dates else None, "end": max(dates) if dates else None}
+
+    # 프로그레스 트렌드 (주별 진행률)
+    progress_trend = []
+    for report in reports:
+        week_tasks = [
+            t for t in all_tasks if t.created_at and t.created_at.isocalendar()[1] == int(report.week.split("-W")[1])
+        ]
+        if week_tasks:
+            avg_progress = sum(t.progress_rate for t in week_tasks) / len(week_tasks)
+            progress_trend.append({"week": report.week, "progress": round(avg_progress, 1)})
+
+    return {
+        "found": True,
+        "project_info": {
+            "name": project.name,
+            "description": project.description or f"{project.name} 프로젝트 진행 현황",
+        },
+        "summary": {
+            "total_events": len(timeline_events),
+            "completed_tasks": completed_tasks,
+            "issues_count": issues_count,
+            "date_range": date_range,
+        },
+        "timeline_events": timeline_events,
+        "progress_trend": progress_trend,
     }

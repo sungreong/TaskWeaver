@@ -194,7 +194,9 @@ const CSVDownloadButton = ({ className = '', variant = 'default' }) => {
                     >
                       <option value="">전체</option>
                       {filterOptions.projects.map(project => (
-                        <option key={project} value={project}>{project}</option>
+                        <option key={typeof project === 'string' ? project : project.name} value={typeof project === 'string' ? project : project.name}>
+                          {typeof project === 'string' ? project : project.name}
+                        </option>
                       ))}
                     </select>
                   </div>

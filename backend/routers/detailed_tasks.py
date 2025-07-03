@@ -1,9 +1,12 @@
-from fastapi import APIRouter, Depends, HTTPException, UploadFile, File
-from sqlalchemy.orm import Session
+from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Query
+from fastapi.responses import StreamingResponse
+from sqlalchemy.orm import Session, joinedload
 from sqlalchemy import and_, or_, desc
 from typing import List, Optional
 import pandas as pd
 import io
+import json
+from datetime import datetime, date
 from database import get_db
 from models import (
     DetailedTaskDB,
@@ -14,55 +17,114 @@ from models import (
     WeeklyReportDB,
     WeeklyReportDetailedTasksUpdate,
     TaskStatus,
+    weekly_report_detailed_tasks,
+    ProjectDB,
 )
 
 router = APIRouter(prefix="/detailed-tasks", tags=["detailed-tasks"])
 
 
+def get_project_by_name(db: Session, project_name: str) -> ProjectDB:
+    """프로젝트명으로 프로젝트 객체를 조회합니다."""
+    project = db.query(ProjectDB).filter(ProjectDB.name == project_name).first()
+    if not project:
+        raise HTTPException(status_code=404, detail=f"프로젝트 '{project_name}'를 찾을 수 없습니다.")
+    return project
+
+
+def get_project_id_by_name(db: Session, project_name: str) -> int:
+    """프로젝트명으로 프로젝트 ID를 조회합니다."""
+    project = get_project_by_name(db, project_name)
+    return project.id
+
+
 # 상세 업무 생성
 @router.post("/", response_model=DetailedTaskResponse)
 def create_detailed_task(task: DetailedTaskCreate, db: Session = Depends(get_db)):
+    """새로운 상세 업무를 생성합니다."""
+
+    # 프로젝트명을 project_id로 변환
+    project_id = get_project_id_by_name(db, task.project)
+
     # 동일한 프로젝트-업무항목 조합이 이미 존재하는지 확인
     existing_task = (
         db.query(DetailedTaskDB)
-        .filter(
-            and_(
-                DetailedTaskDB.project == task.project,
-                DetailedTaskDB.task_item == task.task_item,
-            )
-        )
+        .filter(DetailedTaskDB.project_id == project_id)
+        .filter(DetailedTaskDB.task_item == task.task_item)
         .first()
     )
 
     if existing_task:
-        raise HTTPException(
-            status_code=400,
-            detail=f"프로젝트 '{task.project}'에 업무항목 '{task.task_item}'이 이미 존재합니다.",
-        )
+        raise HTTPException(status_code=400, detail="동일한 프로젝트에 같은 업무 항목이 이미 존재합니다.")
 
-    # 날짜 문자열을 Date 객체로 변환 (빈 문자열은 None으로 처리)
-    task_data = task.model_dump()
-    for date_field in ["planned_end_date", "actual_end_date"]:
-        if task_data[date_field] and task_data[date_field].strip():
+    # 날짜 변환
+    planned_end_date = None
+    actual_end_date = None
+
+    if task.planned_end_date:
+        if isinstance(task.planned_end_date, str):
             try:
-                from datetime import datetime
-
-                task_data[date_field] = datetime.strptime(task_data[date_field], "%Y-%m-%d").date()
-            except (ValueError, TypeError):
-                task_data[date_field] = None
+                planned_end_date = datetime.strptime(task.planned_end_date, "%Y-%m-%d").date()
+            except ValueError:
+                raise HTTPException(status_code=400, detail="종료예정일 형식이 올바르지 않습니다. (YYYY-MM-DD)")
         else:
-            task_data[date_field] = None
+            planned_end_date = task.planned_end_date
 
-    db_task = DetailedTaskDB(**task_data)
+    if task.actual_end_date:
+        if isinstance(task.actual_end_date, str):
+            try:
+                actual_end_date = datetime.strptime(task.actual_end_date, "%Y-%m-%d").date()
+            except ValueError:
+                raise HTTPException(status_code=400, detail="실제완료일 형식이 올바르지 않습니다. (YYYY-MM-DD)")
+        else:
+            actual_end_date = task.actual_end_date
+
+    # ✨ project_id를 사용하여 DB 객체 생성
+    db_task = DetailedTaskDB(
+        project_id=project_id,  # ✨ Integer FK 사용
+        stage=task.stage,
+        task_item=task.task_item,
+        assignee=task.assignee,
+        current_status=task.current_status,
+        has_risk=task.has_risk,
+        description=task.description,
+        planned_end_date=planned_end_date,
+        actual_end_date=actual_end_date,
+        progress_rate=task.progress_rate,
+    )
+
     db.add(db_task)
     db.commit()
     db.refresh(db_task)
 
-    return DetailedTaskResponse.model_validate(db_task)
+    # ✨ relationship을 통해 project 정보를 로드하고 수동으로 응답 구성
+    db.refresh(db_task)  # relationship 로드를 위해 refresh
+
+    # project 이름을 가져오기 위해 relationship 사용
+    project_name = db_task.project_obj.name if db_task.project_obj else task.project
+
+    # 수동으로 응답 객체 구성
+    response_data = {
+        "id": db_task.id,
+        "project": project_name,
+        "stage": db_task.stage,
+        "task_item": db_task.task_item,
+        "assignee": db_task.assignee,
+        "current_status": db_task.current_status,
+        "has_risk": db_task.has_risk,
+        "description": db_task.description,
+        "planned_end_date": db_task.planned_end_date,
+        "actual_end_date": db_task.actual_end_date,
+        "progress_rate": db_task.progress_rate,
+        "created_at": db_task.created_at,
+        "updated_at": db_task.updated_at,
+    }
+
+    return DetailedTaskResponse(**response_data)
 
 
-# 모든 상세 업무 조회 (필터링 지원)
-@router.get("/", response_model=List[DetailedTaskResponse])
+# 상세 업무 목록 조회 (필터링 포함)
+@router.get("/", response_model=List[dict])
 def get_detailed_tasks(
     project: Optional[str] = None,
     stage: Optional[str] = None,
@@ -75,161 +137,289 @@ def get_detailed_tasks(
     offset: int = 0,
     db: Session = Depends(get_db),
 ):
-    query = db.query(DetailedTaskDB)
+    """상세 업무 목록을 조회합니다. (필터링 지원)"""
 
-    # 필터 적용
+    # 기본 쿼리 (✨ relationship으로 project 정보도 함께 로드)
+    query = db.query(DetailedTaskDB).options(joinedload(DetailedTaskDB.project_obj))
+
+    # ✨ 프로젝트 필터링 (프로젝트명으로)
     if project:
-        query = query.filter(DetailedTaskDB.project.ilike(f"%{project}%"))
+        project_obj = db.query(ProjectDB).filter(ProjectDB.name == project).first()
+        if project_obj:
+            query = query.filter(DetailedTaskDB.project_id == project_obj.id)
+        else:
+            # 존재하지 않는 프로젝트면 빈 결과 반환
+            return []
+
+    # 기타 필터링
     if stage:
-        query = query.filter(DetailedTaskDB.stage.ilike(f"%{stage}%"))
+        query = query.filter(DetailedTaskDB.stage == stage)
     if assignee:
-        query = query.filter(DetailedTaskDB.assignee.ilike(f"%{assignee}%"))
+        query = query.filter(DetailedTaskDB.assignee == assignee)
     if current_status:
         query = query.filter(DetailedTaskDB.current_status == current_status)
     if has_risk is not None:
         query = query.filter(DetailedTaskDB.has_risk == has_risk)
     if planned_start_date:
-        query = query.filter(DetailedTaskDB.planned_end_date >= planned_start_date)
+        try:
+            start_date = datetime.strptime(planned_start_date, "%Y-%m-%d").date()
+            query = query.filter(DetailedTaskDB.planned_end_date >= start_date)
+        except ValueError:
+            pass
     if planned_end_date:
-        query = query.filter(DetailedTaskDB.planned_end_date <= planned_end_date)
+        try:
+            end_date = datetime.strptime(planned_end_date, "%Y-%m-%d").date()
+            query = query.filter(DetailedTaskDB.planned_end_date <= end_date)
+        except ValueError:
+            pass
 
-    # 최신순 정렬
+    # 정렬 및 페이징
     query = query.order_by(desc(DetailedTaskDB.updated_at))
-
-    # 페이징
     tasks = query.offset(offset).limit(limit).all()
 
-    return [DetailedTaskResponse.model_validate(task) for task in tasks]
+    # ✨ 주간 보고서 연결 정보도 포함 (relationship 활용)
+    result = []
+    for task in tasks:
+        # ✨ relationship으로 연결된 주간 보고서 정보 조회
+        linked_reports = [
+            {"id": report.id, "week": report.week, "stage": report.stage} for report in task.weekly_reports
+        ]
+
+        task_dict = {
+            "id": task.id,
+            "project": task.project_obj.name,
+            "stage": task.stage,
+            "task_item": task.task_item,
+            "assignee": task.assignee,
+            "current_status": task.current_status.value,
+            "has_risk": task.has_risk,
+            "description": task.description,
+            "planned_end_date": task.planned_end_date.strftime("%Y-%m-%d") if task.planned_end_date else None,
+            "actual_end_date": task.actual_end_date.strftime("%Y-%m-%d") if task.actual_end_date else None,
+            "progress_rate": task.progress_rate,
+            "created_at": task.created_at.isoformat() if task.created_at else None,
+            "updated_at": task.updated_at.isoformat() if task.updated_at else None,
+            "linked_weekly_reports": linked_reports,
+        }
+        result.append(task_dict)
+
+    return result
 
 
-# 프로젝트별 상세 업무 조회
 @router.get("/by-project/{project_name}", response_model=List[DetailedTaskResponse])
 def get_detailed_tasks_by_project(project_name: str, db: Session = Depends(get_db)):
+    """특정 프로젝트의 모든 상세 업무를 조회합니다."""
+
+    # ✨ 프로젝트명을 project_id로 변환
+    project = get_project_by_name(db, project_name)
+
+    # ✨ relationship으로 간단하게 조회 (eager loading)
     tasks = (
         db.query(DetailedTaskDB)
-        .filter(DetailedTaskDB.project == project_name)
-        .order_by(desc(DetailedTaskDB.updated_at))
+        .options(joinedload(DetailedTaskDB.project_obj))
+        .filter(DetailedTaskDB.project_id == project.id)
         .all()
     )
 
-    return [DetailedTaskResponse.model_validate(task) for task in tasks]
+    # ✨ 수동으로 응답 객체들 구성
+    result = []
+    for task in tasks:
+        response_data = {
+            "id": task.id,
+            "project": task.project_obj.name,
+            "stage": task.stage,
+            "task_item": task.task_item,
+            "assignee": task.assignee,
+            "current_status": task.current_status,
+            "has_risk": task.has_risk,
+            "description": task.description,
+            "planned_end_date": task.planned_end_date,
+            "actual_end_date": task.actual_end_date,
+            "progress_rate": task.progress_rate,
+            "created_at": task.created_at,
+            "updated_at": task.updated_at,
+        }
+        result.append(DetailedTaskResponse(**response_data))
+
+    return result
 
 
-# 프로젝트+단계별 상세 업무 조회 (주차별 보고서 연동용)
 @router.get("/by-project-stage/{project_name}")
 def get_detailed_tasks_by_project_and_stage(
     project_name: str, stage: Optional[str] = None, db: Session = Depends(get_db)
 ):
-    """프로젝트와 단계에 맞는 상세 업무 목록을 조회합니다."""
-    query = db.query(DetailedTaskDB).filter(DetailedTaskDB.project == project_name)
+    """프로젝트별, 단계별 상세 업무를 조회합니다."""
 
-    # 단계 필터링 (선택사항)
+    # ✨ 프로젝트명을 project_id로 변환
+    project = get_project_by_name(db, project_name)
+
+    # ✨ relationship 기반 쿼리
+    query = db.query(DetailedTaskDB).filter(DetailedTaskDB.project_id == project.id)
+
     if stage:
-        # 단계는 완전 일치가 아닌 유사 매칭으로 처리
-        # 예: "설계" 단계의 보고서에 "상세설계", "기본설계" 등의 업무가 포함될 수 있음
-        query = query.filter(
-            or_(
-                DetailedTaskDB.stage.ilike(f"%{stage}%"),
-                DetailedTaskDB.task_item.ilike(f"%{stage}%"),
-                # 단계 필드와 업무 항목 모두에서 검색
-            )
-        )
+        query = query.filter(DetailedTaskDB.stage == stage)
 
-    tasks = query.order_by(desc(DetailedTaskDB.updated_at)).all()
+    tasks = query.order_by(DetailedTaskDB.stage, DetailedTaskDB.task_item).all()
 
-    # 간소화된 응답 (Multi-select용)
-    result = []
+    # 단계별 그룹핑
+    grouped_tasks = {}
     for task in tasks:
-        result.append(
+        task_stage = task.stage or "기타"
+        if task_stage not in grouped_tasks:
+            grouped_tasks[task_stage] = []
+
+        grouped_tasks[task_stage].append(
             {
                 "id": task.id,
-                "stage": task.stage or "",
                 "task_item": task.task_item,
-                "assignee": task.assignee or "",
-                "current_status": task.current_status.value if task.current_status else "not_started",
+                "assignee": task.assignee,
+                "current_status": task.current_status.value,
+                "progress_rate": task.progress_rate,
                 "has_risk": task.has_risk,
-                "progress_rate": task.progress_rate or 0,
-                "planned_end_date": task.planned_end_date.strftime("%Y-%m-%d") if task.planned_end_date else "",
+                "planned_end_date": task.planned_end_date.strftime("%Y-%m-%d") if task.planned_end_date else None,
             }
         )
 
-    return result
+    return {
+        "project": project_name,
+        "total_tasks": len(tasks),
+        "stages": grouped_tasks,
+    }
 
 
 # 특정 상세 업무 조회
 @router.get("/{task_id}", response_model=DetailedTaskResponse)
 def get_detailed_task(task_id: int, db: Session = Depends(get_db)):
-    task = db.query(DetailedTaskDB).filter(DetailedTaskDB.id == task_id).first()
+    """상세 업무 정보를 조회합니다."""
+    task = (
+        db.query(DetailedTaskDB)
+        .options(joinedload(DetailedTaskDB.project_obj))
+        .filter(DetailedTaskDB.id == task_id)
+        .first()
+    )
     if not task:
         raise HTTPException(status_code=404, detail="상세 업무를 찾을 수 없습니다.")
 
-    return DetailedTaskResponse.model_validate(task)
+    # ✨ 수동으로 응답 객체 구성 (project 필드 포함)
+    response_data = {
+        "id": task.id,
+        "project": task.project_obj.name,
+        "stage": task.stage,
+        "task_item": task.task_item,
+        "assignee": task.assignee,
+        "current_status": task.current_status,
+        "has_risk": task.has_risk,
+        "description": task.description,
+        "planned_end_date": task.planned_end_date,
+        "actual_end_date": task.actual_end_date,
+        "progress_rate": task.progress_rate,
+        "created_at": task.created_at,
+        "updated_at": task.updated_at,
+    }
+
+    return DetailedTaskResponse(**response_data)
 
 
 # 상세 업무 수정
 @router.put("/{task_id}", response_model=DetailedTaskResponse)
 def update_detailed_task(task_id: int, task_update: DetailedTaskUpdate, db: Session = Depends(get_db)):
-    task = db.query(DetailedTaskDB).filter(DetailedTaskDB.id == task_id).first()
-    if not task:
+    """상세 업무 정보를 수정합니다."""
+
+    db_task = db.query(DetailedTaskDB).filter(DetailedTaskDB.id == task_id).first()
+    if not db_task:
         raise HTTPException(status_code=404, detail="상세 업무를 찾을 수 없습니다.")
 
-    # 동일한 프로젝트-업무항목 조합 중복 확인 (자신 제외)
-    if task_update.project and task_update.task_item:
+    # 업데이트할 필드들
+    update_data = task_update.model_dump(exclude_unset=True)
+
+    # ✨ 프로젝트 변경 시 project_id 업데이트
+    if "project" in update_data and update_data["project"]:
+        project_id = get_project_id_by_name(db, update_data["project"])
+        update_data["project_id"] = project_id
+        # project 필드는 제거 (DB에는 project_id만 저장)
+        del update_data["project"]
+
+    # 날짜 변환
+    for date_field in ["planned_end_date", "actual_end_date"]:
+        if date_field in update_data and update_data[date_field]:
+            if isinstance(update_data[date_field], str):
+                try:
+                    update_data[date_field] = datetime.strptime(update_data[date_field], "%Y-%m-%d").date()
+                except ValueError:
+                    raise HTTPException(status_code=400, detail=f"{date_field} 형식이 올바르지 않습니다. (YYYY-MM-DD)")
+
+    # 중복 체크 (프로젝트나 업무항목이 변경되는 경우)
+    if "project_id" in update_data or "task_item" in update_data:
+        project_id = update_data.get("project_id", db_task.project_id)
+        task_item = update_data.get("task_item", db_task.task_item)
+
         existing_task = (
             db.query(DetailedTaskDB)
-            .filter(
-                and_(
-                    DetailedTaskDB.project == task_update.project,
-                    DetailedTaskDB.task_item == task_update.task_item,
-                    DetailedTaskDB.id != task_id,
-                )
-            )
+            .filter(DetailedTaskDB.project_id == project_id)
+            .filter(DetailedTaskDB.task_item == task_item)
+            .filter(DetailedTaskDB.id != task_id)  # 현재 업무는 제외
             .first()
         )
 
         if existing_task:
-            raise HTTPException(
-                status_code=400,
-                detail=f"프로젝트 '{task_update.project}'에 업무항목 '{task_update.task_item}'이 이미 존재합니다.",
-            )
+            raise HTTPException(status_code=400, detail="동일한 프로젝트에 같은 업무 항목이 이미 존재합니다.")
 
-    # 업데이트할 데이터 준비
-    update_data = task_update.model_dump(exclude_unset=True)
+    # 필드 업데이트
+    for field, value in update_data.items():
+        setattr(db_task, field, value)
 
-    # 날짜 문자열을 Date 객체로 변환 (빈 문자열은 None으로 처리)
-    for date_field in ["planned_end_date", "actual_end_date"]:
-        if date_field in update_data:
-            if update_data[date_field] and update_data[date_field].strip():
-                try:
-                    from datetime import datetime
-
-                    update_data[date_field] = datetime.strptime(update_data[date_field], "%Y-%m-%d").date()
-                except (ValueError, TypeError):
-                    update_data[date_field] = None
-            else:
-                update_data[date_field] = None
-
-    # 업데이트
-    for key, value in update_data.items():
-        setattr(task, key, value)
-
+    db_task.updated_at = datetime.utcnow()
     db.commit()
-    db.refresh(task)
+    db.refresh(db_task)
 
-    return DetailedTaskResponse.model_validate(task)
+    # ✨ relationship을 통해 project 정보를 로드하고 수동으로 응답 구성
+    # project_obj가 로드되지 않았다면 다시 로드
+    if not db_task.project_obj:
+        db_task = (
+            db.query(DetailedTaskDB)
+            .options(joinedload(DetailedTaskDB.project_obj))
+            .filter(DetailedTaskDB.id == task_id)
+            .first()
+        )
+
+    response_data = {
+        "id": db_task.id,
+        "project": db_task.project_obj.name,
+        "stage": db_task.stage,
+        "task_item": db_task.task_item,
+        "assignee": db_task.assignee,
+        "current_status": db_task.current_status,
+        "has_risk": db_task.has_risk,
+        "description": db_task.description,
+        "planned_end_date": db_task.planned_end_date,
+        "actual_end_date": db_task.actual_end_date,
+        "progress_rate": db_task.progress_rate,
+        "created_at": db_task.created_at,
+        "updated_at": db_task.updated_at,
+    }
+
+    return DetailedTaskResponse(**response_data)
 
 
 # 상세 업무 삭제
 @router.delete("/{task_id}")
 def delete_detailed_task(task_id: int, db: Session = Depends(get_db)):
-    task = db.query(DetailedTaskDB).filter(DetailedTaskDB.id == task_id).first()
-    if not task:
+    """상세 업무를 삭제합니다."""
+
+    db_task = db.query(DetailedTaskDB).filter(DetailedTaskDB.id == task_id).first()
+    if not db_task:
         raise HTTPException(status_code=404, detail="상세 업무를 찾을 수 없습니다.")
 
-    db.delete(task)
+    # ✨ Many-to-Many 관계는 SQLAlchemy가 자동으로 정리
+    # cascade 설정에 의해 관련 연결들이 자동으로 정리됨
+
+    task_item = db_task.task_item
+    project_name = db_task.project_obj.name  # property로 프로젝트명 반환
+
+    db.delete(db_task)
     db.commit()
 
-    return {"message": "상세 업무가 성공적으로 삭제되었습니다."}
+    return {"message": f"상세 업무 '{task_item}' (프로젝트: {project_name})가 성공적으로 삭제되었습니다."}
 
 
 # 주간 보고서에 상세 업무 연결
@@ -237,23 +427,24 @@ def delete_detailed_task(task_id: int, db: Session = Depends(get_db)):
 def link_detailed_tasks_to_weekly_report(
     report_id: int, task_links: WeeklyReportDetailedTasksUpdate, db: Session = Depends(get_db)
 ):
+    """주간 보고서에 상세 업무들을 연결합니다."""
     try:
         # 입력 데이터 로깅
         print(f"🔗 주간 보고서 {report_id}에 상세 업무 연결 요청")
         print(f"📋 요청된 상세 업무 IDs: {task_links.detailed_task_ids}")
-        print(f"📊 요청 데이터 타입: {type(task_links.detailed_task_ids)}")
 
-        # 빈 목록 체크
-        if not task_links.detailed_task_ids:
-            print("⚠️ 빈 상세 업무 목록으로 연결 해제 처리")
-
-        # 주간 보고서 존재 확인
-        weekly_report = db.query(WeeklyReportDB).filter(WeeklyReportDB.id == report_id).first()
+        # 주간 보고서 존재 확인 (project 정보와 함께 로드)
+        weekly_report = (
+            db.query(WeeklyReportDB)
+            .options(joinedload(WeeklyReportDB.project_obj))
+            .filter(WeeklyReportDB.id == report_id)
+            .first()
+        )
         if not weekly_report:
             print(f"❌ 주간 보고서 {report_id}를 찾을 수 없음")
             raise HTTPException(status_code=404, detail="주간 보고서를 찾을 수 없습니다.")
 
-        print(f"✅ 주간 보고서 발견: {weekly_report.project} - {weekly_report.week}")
+        print(f"✅ 주간 보고서 발견: {weekly_report.project_obj.name} - {weekly_report.week}")
 
         # 상세 업무들 존재 확인 (빈 목록이 아닌 경우에만)
         if task_links.detailed_task_ids:
@@ -272,9 +463,13 @@ def link_detailed_tasks_to_weekly_report(
             detailed_tasks = []
             print("🔄 빈 목록으로 모든 연결 해제")
 
-        # 기존 연결 제거 후 새로운 연결 설정
+        # ✨ SQLAlchemy relationship을 사용한 연결 관리
         old_count = len(weekly_report.detailed_tasks)
+
+        # 기존 연결 해제
         weekly_report.detailed_tasks.clear()
+
+        # 새로운 연결 설정
         weekly_report.detailed_tasks.extend(detailed_tasks)
 
         db.commit()
@@ -301,38 +496,64 @@ def link_detailed_tasks_to_weekly_report(
 # 주간 보고서의 연결된 상세 업무 조회
 @router.get("/weekly-reports/{report_id}/tasks", response_model=List[DetailedTaskResponse])
 def get_linked_detailed_tasks(report_id: int, db: Session = Depends(get_db)):
+    """주간 보고서에 연결된 상세 업무 목록을 조회합니다."""
     weekly_report = db.query(WeeklyReportDB).filter(WeeklyReportDB.id == report_id).first()
     if not weekly_report:
         raise HTTPException(status_code=404, detail="주간 보고서를 찾을 수 없습니다.")
 
-    return [DetailedTaskResponse.model_validate(task) for task in weekly_report.detailed_tasks]
+    # ✨ SQLAlchemy relationship을 사용한 조회 (eager loading)
+    tasks = (
+        db.query(DetailedTaskDB)
+        .options(joinedload(DetailedTaskDB.project_obj))
+        .filter(DetailedTaskDB.id.in_([task.id for task in weekly_report.detailed_tasks]))
+        .all()
+    )
+
+    # ✨ 수동으로 응답 객체들 구성
+    result = []
+    for task in tasks:
+        response_data = {
+            "id": task.id,
+            "project": task.project_obj.name,
+            "stage": task.stage,
+            "task_item": task.task_item,
+            "assignee": task.assignee,
+            "current_status": task.current_status,
+            "has_risk": task.has_risk,
+            "description": task.description,
+            "planned_end_date": task.planned_end_date,
+            "actual_end_date": task.actual_end_date,
+            "progress_rate": task.progress_rate,
+            "created_at": task.created_at,
+            "updated_at": task.updated_at,
+        }
+        result.append(DetailedTaskResponse(**response_data))
+
+    return result
 
 
 # 상세 업무와 연결된 주간 보고서 조회
 @router.get("/{task_id}/weekly-reports")
 def get_task_weekly_reports(task_id: int, db: Session = Depends(get_db)):
     """상세 업무와 연결된 주간 보고서 목록을 조회합니다."""
-    from models import weekly_report_detailed_tasks
 
-    task = db.query(DetailedTaskDB).filter(DetailedTaskDB.id == task_id).first()
+    # 상세 업무 조회 (relationship과 함께)
+    task = (
+        db.query(DetailedTaskDB)
+        .options(joinedload(DetailedTaskDB.weekly_reports).joinedload(WeeklyReportDB.project_obj))
+        .filter(DetailedTaskDB.id == task_id)
+        .first()
+    )
     if not task:
         raise HTTPException(status_code=404, detail="상세 업무를 찾을 수 없습니다.")
 
-    # 연결된 주간 보고서 조회
-    reports = (
-        db.query(WeeklyReportDB)
-        .join(weekly_report_detailed_tasks)
-        .filter(weekly_report_detailed_tasks.c.detailed_task_id == task_id)
-        .order_by(desc(WeeklyReportDB.week))
-        .all()
-    )
-
+    # ✨ SQLAlchemy relationship을 사용한 연결된 주간 보고서 조회
     result = []
-    for report in reports:
+    for report in task.weekly_reports:
         result.append(
             {
                 "id": report.id,
-                "project": report.project,
+                "project": report.project_obj.name,  # relationship을 통한 프로젝트명 반환
                 "week": report.week,
                 "stage": report.stage,
                 "created_at": report.created_at.isoformat() if report.created_at else None,
@@ -346,7 +567,13 @@ def get_task_weekly_reports(task_id: int, db: Session = Depends(get_db)):
 # 프로젝트별 상세 업무 통계
 @router.get("/statistics/{project_name}")
 def get_project_task_statistics(project_name: str, db: Session = Depends(get_db)):
-    tasks = db.query(DetailedTaskDB).filter(DetailedTaskDB.project == project_name).all()
+    """프로젝트별 상세 업무 통계를 조회합니다."""
+
+    # 프로젝트 확인
+    project = get_project_by_name(db, project_name)
+
+    # 해당 프로젝트의 모든 업무 조회
+    tasks = db.query(DetailedTaskDB).filter(DetailedTaskDB.project_id == project.id).all()
 
     if not tasks:
         return {
@@ -499,6 +726,20 @@ def import_detailed_tasks_from_file(file: UploadFile = File(...), db: Session = 
                     "progress_rate": int(row.get("progress_rate", 0)) if pd.notna(row.get("progress_rate")) else 0,
                 }
 
+                # 프로젝트 ID 변환
+                try:
+                    project_id = get_project_id_by_name(db, task_data["project"])
+                except HTTPException:
+                    failed_imports.append(
+                        {
+                            "row": index + 2,
+                            "project": task_data["project"],
+                            "task_item": task_data["task_item"],
+                            "reason": "프로젝트를 찾을 수 없음",
+                        }
+                    )
+                    continue
+
                 # 날짜 처리
                 for date_field in ["planned_end_date", "actual_end_date"]:
                     if date_field in df.columns and pd.notna(row[date_field]):
@@ -517,7 +758,7 @@ def import_detailed_tasks_from_file(file: UploadFile = File(...), db: Session = 
                     db.query(DetailedTaskDB)
                     .filter(
                         and_(
-                            DetailedTaskDB.project == task_data["project"],
+                            DetailedTaskDB.project_id == project_id,
                             DetailedTaskDB.task_item == task_data["task_item"],
                         )
                     )
@@ -536,6 +777,9 @@ def import_detailed_tasks_from_file(file: UploadFile = File(...), db: Session = 
                     continue
 
                 # 데이터베이스에 저장
+                task_data.pop("project")  # project 필드 제거
+                task_data["project_id"] = project_id  # project_id 추가
+
                 db_task = DetailedTaskDB(**task_data)
                 db.add(db_task)
                 db.commit()
@@ -546,26 +790,24 @@ def import_detailed_tasks_from_file(file: UploadFile = File(...), db: Session = 
                 failed_imports.append(
                     {
                         "row": index + 2,
-                        "project": str(row.get("project", "")),
-                        "task_item": str(row.get("task_item", "")),
-                        "reason": f"저장 오류: {str(e)}",
+                        "project": task_data.get("project", ""),
+                        "task_item": task_data.get("task_item", ""),
+                        "reason": f"처리 중 오류: {str(e)}",
                     }
                 )
-                db.rollback()
+                continue
 
         return {
             "success": True,
-            "message": f"파일 업로드가 완료되었습니다.",
+            "message": f"일괄 등록이 완료되었습니다. 성공: {successful_imports}개, 실패: {len(failed_imports)}개",
             "data": {
-                "total_rows": len(df),
                 "successful_imports": successful_imports,
-                "failed_imports": len(failed_imports),
-                "failed_details": failed_imports[:10],  # 최대 10개만 표시
+                "failed_imports": failed_imports,
+                "total_processed": len(df),
             },
         }
 
     except Exception as e:
-        db.rollback()
         raise HTTPException(status_code=500, detail=f"파일 업로드 중 오류가 발생했습니다: {str(e)}")
 
 

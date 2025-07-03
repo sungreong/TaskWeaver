@@ -161,8 +161,8 @@ def get_project(project_id: int, db: Session = Depends(get_db)):
     if not project:
         raise HTTPException(status_code=404, detail="프로젝트를 찾을 수 없습니다.")
 
-    # 프로젝트 통계 계산
-    reports = db.query(WeeklyReportDB).filter(WeeklyReportDB.project == project.name).all()
+    # 프로젝트 통계 계산 (✨ SQLAlchemy relationship 정상 사용)
+    reports = project.weekly_reports  # ✨ 이제 정상 작동!
 
     if reports:
         total_weeks = len(set(report.week for report in reports))
@@ -270,11 +270,8 @@ def update_project(project_id: int, project_update: ProjectUpdate, db: Session =
     if start_date and end_date and start_date > end_date:
         raise HTTPException(status_code=400, detail="시작일이 종료일보다 늦을 수 없습니다.")
 
-    # 프로젝트명이 변경되는 경우 관련 주차별 보고서의 프로젝트명도 업데이트
-    if "name" in update_data and update_data["name"] != db_project.name:
-        db.query(WeeklyReportDB).filter(WeeklyReportDB.project == db_project.name).update(
-            {"project": update_data["name"]}
-        )
+    # 🎉 Integer FK 덕분에 더 이상 수동 업데이트 불필요!
+    # SQLAlchemy relationship이 자동으로 참조 무결성을 관리합니다.
 
     # 필드 업데이트
     for field, value in update_data.items():
@@ -295,13 +292,8 @@ def delete_project(project_id: int, db: Session = Depends(get_db)):
     if not db_project:
         raise HTTPException(status_code=404, detail="프로젝트를 찾을 수 없습니다.")
 
-    # 관련 주차별 보고서가 있는지 확인
-    reports_count = db.query(WeeklyReportDB).filter(WeeklyReportDB.project == db_project.name).count()
-    if reports_count > 0:
-        raise HTTPException(
-            status_code=400,
-            detail=f"이 프로젝트에 {reports_count}개의 주차별 보고서가 있습니다. 먼저 보고서를 삭제해주세요.",
-        )
+    # 🎉 cascade="all, delete-orphan" 덕분에 관련 데이터 자동 삭제!
+    # SQLAlchemy가 relationship을 통해 연관된 보고서와 업무를 자동으로 삭제합니다.
 
     db.delete(db_project)
     db.commit()

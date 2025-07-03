@@ -4,14 +4,29 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy import inspect
 from database import engine, Base
+
+# 🎉 설정 분리: 하드코딩 제거!
+from config import settings, validate_settings
+
 from routers import tasks, summary, export, projects, detailed_tasks
 
 # 모델들을 import해야 Base.metadata에 등록됨
 from models import ProjectDB, WeeklyReportDB, DetailedTaskDB
 
-# 로깅 설정
-logging.basicConfig(level=logging.INFO)
+# 🔧 동적 로깅 설정 (환경 변수 기반)
+logging.basicConfig(
+    level=getattr(logging, settings.LOG_LEVEL.upper()),
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+    filename=settings.LOG_FILE if settings.LOG_FILE else None,
+)
 logger = logging.getLogger(__name__)
+
+# 설정 검증 및 출력
+logger.info(f"🚀 Project Tracker API 시작")
+logger.info(f"🔧 현재 설정:\n{settings}")
+config_issues = validate_settings()
+if config_issues:
+    logger.warning(f"⚠️ 설정 문제점: {config_issues}")
 
 
 def ensure_database_initialized():
@@ -55,12 +70,14 @@ app = FastAPI(
     title="Weekly Project Tracker API",
     description="주차별 프로젝트 관리를 위한 API",
     version="1.0.0",
+    debug=settings.DEBUG,  # 환경 변수 기반 디버그 모드
 )
 
-# CORS 설정
+# 🌐 동적 CORS 설정 (환경 변수 기반)
+logger.info(f"🌐 CORS Origins: {settings.cors_origins_list}")
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000"],
+    allow_origins=settings.cors_origins_list,  # 환경 변수에서 가져옴
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -79,6 +96,7 @@ def read_root():
     return {
         "message": "Weekly Project Tracker API",
         "version": "1.0.0",
+        "environment": "development" if settings.is_development else "production",
         "docs": "/docs",
         "features": ["프로젝트 관리", "주차별 보고서 관리", "통계 및 요약", "CSV 내보내기"],
     }
@@ -86,4 +104,10 @@ def read_root():
 
 @app.get("/health")
 def health_check():
-    return {"status": "healthy"}
+    """서버 상태 확인"""
+    return {
+        "status": "healthy",
+        "environment": "development" if settings.is_development else "production",
+        "database": "connected",
+        "cors_origins": len(settings.cors_origins_list),
+    }

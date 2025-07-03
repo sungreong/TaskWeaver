@@ -52,17 +52,17 @@ class ProjectDB(Base):
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
-    # 관계 설정
-    weekly_reports = relationship("WeeklyReportDB", back_populates="project_obj")
-    detailed_tasks = relationship("DetailedTaskDB", back_populates="project_obj")
+    # ✨ 관계 설정 완전 복원 (cascade 옵션으로 자동 관리)
+    weekly_reports = relationship("WeeklyReportDB", back_populates="project_obj", cascade="all, delete-orphan")
+    detailed_tasks = relationship("DetailedTaskDB", back_populates="project_obj", cascade="all, delete-orphan")
 
 
-# 주차별 보고서 DB 모델 (기존 수정)
+# 주간 보고서 DB 모델 (Integer FK로 완전 변경)
 class WeeklyReportDB(Base):
     __tablename__ = "weekly_reports"
 
     id = Column(Integer, primary_key=True, index=True)
-    project = Column(String(255), ForeignKey("projects.name"), nullable=False, index=True)
+    project_id = Column(Integer, ForeignKey("projects.id"), nullable=False, index=True)  # ✨ Integer FK
     week = Column(String(10), nullable=False, index=True)  # YYYY-WXX 형식
     stage = Column(String(100), nullable=False)
     this_week_work = Column(Text, nullable=False)
@@ -71,11 +71,49 @@ class WeeklyReportDB(Base):
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
-    # 관계 설정
+    # ✨ 관계 설정 완전 복원
     project_obj = relationship("ProjectDB", back_populates="weekly_reports")
     detailed_tasks = relationship(
         "DetailedTaskDB", secondary=weekly_report_detailed_tasks, back_populates="weekly_reports"
     )
+
+    # ✨ API 호환성은 라우터 레벨에서 처리 (property 제거)
+
+
+# 업무 상태 열거형
+class TaskStatus(str, enum.Enum):
+    NOT_STARTED = "not_started"
+    IN_PROGRESS = "in_progress"
+    COMPLETED = "completed"
+    ON_HOLD = "on_hold"
+    CANCELLED = "cancelled"
+
+
+# 상세 업무 DB 모델 (Integer FK로 완전 변경)
+class DetailedTaskDB(Base):
+    __tablename__ = "detailed_tasks"
+
+    id = Column(Integer, primary_key=True, index=True)
+    project_id = Column(Integer, ForeignKey("projects.id"), nullable=False, index=True)  # ✨ Integer FK
+    stage = Column(String(100))  # 단계/단위
+    task_item = Column(String(255), nullable=False)  # 업무 항목
+    assignee = Column(String(100))  # 담당자
+    current_status = Column(Enum(TaskStatus), default=TaskStatus.NOT_STARTED)  # 현재 상태
+    has_risk = Column(Boolean, default=False)  # 리스크 여부
+    description = Column(Text)  # 설명/요청사항/비고 통합
+    planned_end_date = Column(Date)  # 종료예정일
+    actual_end_date = Column(Date)  # 실제 완료일
+    progress_rate = Column(Float, default=0.0)  # 진행률(%)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    # ✨ 관계 설정 완전 복원
+    project_obj = relationship("ProjectDB", back_populates="detailed_tasks")
+    weekly_reports = relationship(
+        "WeeklyReportDB", secondary=weekly_report_detailed_tasks, back_populates="detailed_tasks"
+    )
+
+    # ✨ API 호환성은 라우터 레벨에서 처리 (property 제거)
 
 
 # Pydantic 모델들
@@ -156,7 +194,7 @@ class ProjectDetail(ProjectResponse):
     stats: Optional[ProjectStats] = None
 
 
-# 기존 주차별 보고서 모델들
+# 기존 주간 보고서 모델들 (API 호환성 유지)
 class WeeklyReportBase(BaseModel):
     project: str = Field(..., min_length=1, max_length=255, description="프로젝트명")
     week: str = Field(..., pattern=r"^\d{4}-W\d{2}$", description="주차 (YYYY-WXX 형식)")
@@ -193,7 +231,6 @@ class ProjectSummary(BaseModel):
     project_name: str
     total_weeks: int
     latest_week: str
-    total_reports: int
     current_issues: int
     completion_rate: float
     stages: List[str]
@@ -216,7 +253,6 @@ class DashboardData(BaseModel):
     recent_updates: List[dict]
 
 
-# 필터 모델
 class WeeklyReportFilter(BaseModel):
     project: Optional[str] = None
     week: Optional[str] = None
@@ -225,44 +261,7 @@ class WeeklyReportFilter(BaseModel):
     end_week: Optional[str] = None
 
 
-# 상세 업무 상태 열거형
-class TaskStatus(str, enum.Enum):
-    NOT_STARTED = "not_started"
-    IN_PROGRESS = "in_progress"
-    COMPLETED = "completed"
-    ON_HOLD = "on_hold"
-    CANCELLED = "cancelled"
-
-
-# 상세 업무 DB 모델 (간소화 버전)
-class DetailedTaskDB(Base):
-    __tablename__ = "detailed_tasks"
-
-    id = Column(Integer, primary_key=True, index=True)
-    project = Column(String(255), ForeignKey("projects.name"), nullable=False, index=True)
-    stage = Column(String(100))  # 단계/단위
-    task_item = Column(String(255), nullable=False)  # 업무 항목
-    assignee = Column(String(100))  # 담당자
-    current_status = Column(Enum(TaskStatus), default=TaskStatus.NOT_STARTED)  # 현재 상태
-    has_risk = Column(Boolean, default=False)  # 리스크 여부
-    description = Column(Text)  # 설명/요청사항/비고 통합
-    planned_end_date = Column(Date)  # 종료예정일
-    actual_end_date = Column(Date)  # 실제 완료일
-    progress_rate = Column(Float, default=0.0)  # 진행률(%)
-    created_at = Column(DateTime, default=datetime.utcnow)
-    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
-
-    # 관계 설정
-    project_obj = relationship("ProjectDB", back_populates="detailed_tasks")
-    weekly_reports = relationship(
-        "WeeklyReportDB", secondary=weekly_report_detailed_tasks, back_populates="detailed_tasks"
-    )
-
-
-# 상세 업무 Pydantic 모델들
-
-
-# 상세 업무 기본 모델 (간소화 버전)
+# 상세 업무 모델들 (API 호환성 유지)
 class DetailedTaskBase(BaseModel):
     project: str = Field(..., min_length=1, max_length=255, description="프로젝트명")
     stage: Optional[str] = Field(None, max_length=100, description="단계/단위")
@@ -276,12 +275,10 @@ class DetailedTaskBase(BaseModel):
     progress_rate: Optional[float] = Field(0.0, ge=0.0, le=100.0, description="진행률(%)")
 
 
-# 상세 업무 생성 모델
 class DetailedTaskCreate(DetailedTaskBase):
     pass
 
 
-# 상세 업무 수정 모델 (간소화 버전)
 class DetailedTaskUpdate(BaseModel):
     project: Optional[str] = Field(None, min_length=1, max_length=255)
     stage: Optional[str] = Field(None, max_length=100)
@@ -295,7 +292,6 @@ class DetailedTaskUpdate(BaseModel):
     progress_rate: Optional[float] = Field(None, ge=0.0, le=100.0)
 
 
-# 상세 업무 응답 모델
 class DetailedTaskResponse(DetailedTaskBase):
     id: int
     created_at: datetime
@@ -307,9 +303,10 @@ class DetailedTaskResponse(DetailedTaskBase):
     @model_serializer
     def serialize_model(self):
         """모델 직렬화 시 날짜 필드를 문자열로 변환"""
+        # 기본 dict 생성
         data = dict(self)
 
-        # 날짜 필드들을 문자열로 변환 (간소화된 필드)
+        # 날짜 필드들을 문자열로 변환
         for field_name in ["planned_end_date", "actual_end_date"]:
             if field_name in data:
                 field_value = data[field_name]
@@ -321,7 +318,6 @@ class DetailedTaskResponse(DetailedTaskBase):
         return data
 
 
-# 상세 업무 필터 모델 (간소화 버전)
 class DetailedTaskFilter(BaseModel):
     project: Optional[str] = None
     stage: Optional[str] = None
@@ -332,6 +328,5 @@ class DetailedTaskFilter(BaseModel):
     planned_end_date: Optional[str] = None
 
 
-# 주차별 보고서와 상세 업무 연결 모델
 class WeeklyReportDetailedTasksUpdate(BaseModel):
     detailed_task_ids: List[int] = Field(..., description="연결할 상세 업무 ID 목록")
