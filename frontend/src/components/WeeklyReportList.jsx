@@ -1043,7 +1043,11 @@ const WeeklyReportList = ({ refreshTrigger, onEdit, projectFilter, fullscreen = 
               onChange={(e) => setEditingValue(e.target.value)}
               onKeyDown={handleEditKeyDown}
               onBlur={handleEditBlur}
-              className="w-full min-h-[120px] p-3 pt-12 border-2 border-blue-500 rounded-lg resize-none focus:outline-none focus:ring-2 focus:ring-blue-600 bg-white text-sm font-mono"
+              className="w-full min-h-[120px] p-3 pt-12 border-2 border-blue-500 rounded-lg resize-y focus:outline-none focus:ring-2 focus:ring-blue-600 bg-white text-sm font-mono"
+              style={{
+                maxHeight: '70vh',  // 화면 높이의 70%로 최대 높이 제한
+                overflowY: 'auto'   // 내용이 넘칠 경우 스크롤바 표시
+              }}
               autoFocus
               placeholder="마크다운을 지원합니다:
 # 제목
@@ -1725,28 +1729,27 @@ Enter: 자동 들여쓰기/리스트 계속"
                     </div>
                   </div>
 
-                  {/* 이번 주 한 일 */}
-                  <div className="mb-4">
-                    <h4 className="font-medium text-gray-900 mb-2">이번 주 한 일</h4>
-                    <div className="bg-gray-50 p-3 rounded">
-                      {renderEditableCell(report.this_week_work, report.id, 'this_week_work', 300, 'text-gray-700', 'gray')}
+                  {/* 이번 주 한 일과 다음 주 계획을 한 행에 배치 */}
+                  <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 mb-4">
+                    <div>
+                      <h4 className="font-medium text-gray-900 mb-2">이번 주 한 일</h4>
+                      <div className="bg-gray-50 p-3 rounded">
+                        {renderEditableCell(report.this_week_work, report.id, 'this_week_work', 300, 'text-gray-700', 'gray')}
+                      </div>
                     </div>
-                  </div>
-
-                  {/* 다음 주 계획 & 이슈/리스크 */}
-                  <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
                     <div>
                       <h4 className="font-medium text-gray-900 mb-2">다음 주 계획</h4>
                       <div className="bg-blue-50 p-3 rounded">
                         {renderEditableCell(report.next_week_plan, report.id, 'next_week_plan', 200, 'text-blue-700', 'blue')}
                       </div>
                     </div>
+                  </div>
 
-                    <div>
-                      <h4 className="font-medium text-gray-900 mb-2">이슈/리스크</h4>
-                      <div className="bg-red-50 p-3 rounded">
-                        {renderEditableCell(report.issues_risks, report.id, 'issues_risks', 200, 'text-red-700', 'red')}
-                      </div>
+                  {/* 이슈/리스크를 별도 행에 배치 */}
+                  <div>
+                    <h4 className="font-medium text-gray-900 mb-2">이슈/리스크</h4>
+                    <div className="bg-red-50 p-3 rounded">
+                      {renderEditableCell(report.issues_risks, report.id, 'issues_risks', 200, 'text-red-700', 'red')}
                     </div>
                   </div>
 

@@ -730,26 +730,25 @@ const WeeklyReportList = ({ refreshTrigger, onReportChange }) => {
                     </div>
                   </div>
 
-                  {/* 이번 주 한 일 */}
-                  <div className="mb-4">
-                    <h4 className="font-medium text-gray-900 mb-2">
-                      📋 이번 주 한 일
-                    </h4>
-                    <div className="bg-gray-50 p-3 rounded">
-                      <ExpandableText
-                        text={report.this_week_work}
-                        maxLength={400}
-                        reportId={report.id}
-                        field="this_week_work_card"
-                        className="text-gray-700"
-                        isMarkdown={true}
-                        bgColor="gray"
-                      />
+                  {/* 이번 주 한 일 & 다음 주 계획 */}
+                  <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 mb-4">
+                    <div>
+                      <h4 className="font-medium text-gray-900 mb-2">
+                        📋 이번 주 한 일
+                      </h4>
+                      <div className="bg-gray-50 p-3 rounded">
+                        <ExpandableText
+                          text={report.this_week_work}
+                          maxLength={400}
+                          reportId={report.id}
+                          field="this_week_work_card"
+                          className="text-gray-700"
+                          isMarkdown={true}
+                          bgColor="gray"
+                        />
+                      </div>
                     </div>
-                  </div>
 
-                  {/* 다음 주 계획 & 이슈/리스크 */}
-                  <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
                     {report.next_week_plan && (
                       <div>
                         <h4 className="font-medium text-gray-900 mb-2">
@@ -768,26 +767,27 @@ const WeeklyReportList = ({ refreshTrigger, onReportChange }) => {
                         </div>
                       </div>
                     )}
-
-                    {report.issues_risks && (
-                      <div>
-                        <h4 className="font-medium text-gray-900 mb-2">
-                          ⚠️ 이슈/리스크
-                        </h4>
-                        <div className="bg-red-50 p-3 rounded">
-                          <ExpandableText
-                            text={report.issues_risks}
-                            maxLength={300}
-                            reportId={report.id}
-                            field="issues_risks_card"
-                            className="text-red-700"
-                            isMarkdown={true}
-                            bgColor="red"
-                          />
-                        </div>
-                      </div>
-                    )}
                   </div>
+
+                  {/* 이슈/리스크 */}
+                  {report.issues_risks && (
+                    <div className="mb-4">
+                      <h4 className="font-medium text-gray-900 mb-2">
+                        ⚠️ 이슈/리스크
+                      </h4>
+                      <div className="bg-red-50 p-3 rounded">
+                        <ExpandableText
+                          text={report.issues_risks}
+                          maxLength={300}
+                          reportId={report.id}
+                          field="issues_risks_card"
+                          className="text-red-700"
+                          isMarkdown={true}
+                          bgColor="red"
+                        />
+                      </div>
+                    </div>
+                  )}
 
                   {/* 메타 정보 */}
                   <div className="text-xs text-gray-500 pt-3 border-t border-gray-100 mt-4">
