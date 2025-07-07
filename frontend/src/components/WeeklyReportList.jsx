@@ -33,6 +33,26 @@ const WeeklyReportList = ({ refreshTrigger, onEdit, projectFilter, fullscreen = 
     actions: 100
   });
   
+  // 컬럼 표시/숨김 상태 관리
+  const [columnVisibility, setColumnVisibility] = useState({
+    week: true,
+    project: true,
+    stage: true,
+    thisWeek: true,
+    nextWeek: true,
+    issues: true,
+    detailedTasks: true,
+    updated: true,
+    actions: true
+  });
+  
+  // 컬럼 관리 메뉴 표시 상태
+  const [showColumnManager, setShowColumnManager] = useState(false);
+  
+  // 최적화 상태 관리
+  const [isOptimized, setIsOptimized] = useState(false);
+  const [lastOptimizedColumns, setLastOptimizedColumns] = useState(null);
+  
   // 드래그 상태 관리
   const [dragState, setDragState] = useState({
     isDragging: false,
@@ -295,6 +315,118 @@ const WeeklyReportList = ({ refreshTrigger, onEdit, projectFilter, fullscreen = 
     }));
   }, []);
 
+    // 표시된 컬럼 목록 필터링 (가장 먼저 선언 - 다른 함수들이 참조함)
+  const getVisibleColumns = useCallback(() => {
+    return Object.entries(columnVisibility)
+      .filter(([_, visible]) => visible)
+      .map(([key, _]) => key);
+  }, [columnVisibility]);
+
+  // 컬럼 정보 매핑
+  const getColumnInfo = useCallback((columnKey) => {
+    const columnInfoMap = {
+      week: { label: '주차', icon: '📅', type: 'meta' },
+      project: { label: '프로젝트', icon: '📁', type: 'meta' },
+      stage: { label: '단계', icon: '🎯', type: 'meta' },
+      thisWeek: { label: '이번 주 한 일', icon: '📝', type: 'content' },
+      nextWeek: { label: '다음 주 계획', icon: '📋', type: 'content' },
+      issues: { label: '이슈/리스크', icon: '⚠️', type: 'content' },
+      detailedTasks: { label: '관련 상세 업무', icon: '🔗', type: 'link' },
+      updated: { label: '수정일', icon: '⏱️', type: 'meta' },
+      actions: { label: '액션', icon: '⚙️', type: 'action' }
+    };
+    return columnInfoMap[columnKey] || { label: columnKey, icon: '❓', type: 'unknown' };
+  }, []);
+
+  // 최적화 상태 체크
+  const getOptimizationStatus = useCallback(() => {
+    const visibleColumns = getVisibleColumns();
+    const importantVisibleColumns = ['thisWeek', 'nextWeek', 'issues'].filter(col => visibleColumns.includes(col));
+    
+    return {
+      hasVisibleImportantColumns: importantVisibleColumns.length > 0,
+      visibleColumnCount: visibleColumns.length,
+      canOptimize: visibleColumns.length > 1 && importantVisibleColumns.length > 0
+    };
+  }, [getVisibleColumns]);
+
+  // 테이블 최적화 (중요한 컬럼 확대, 비중요한 컬럼 축소) - 표시된 컬럼만 최적화
+  const optimizeTableLayout = useCallback(() => {
+    const baseOptimizedWidths = {
+      week: 80,        // 축소
+      project: 100,    // 축소
+      stage: 80,       // 축소
+      thisWeek: 500,   // 확대
+      nextWeek: 500,   // 확대
+      issues: 300,     // 확대
+      detailedTasks: 200, // 유지
+      updated: 60,     // 축소
+      actions: 60      // 축소
+    };
+    
+    // 표시된 컬럼들만 최적화
+    const newColumnWidths = { ...columnWidths };
+    const visibleColumns = getVisibleColumns();
+    
+    // 표시된 컬럼들에 대해서만 최적화된 너비 적용
+    visibleColumns.forEach(columnKey => {
+      if (baseOptimizedWidths[columnKey]) {
+        newColumnWidths[columnKey] = baseOptimizedWidths[columnKey];
+      }
+    });
+    
+    // 중요한 컬럼들이 숨겨져 있다면 표시된 컬럼들에 추가 공간 배분
+    const importantColumns = ['thisWeek', 'nextWeek', 'issues'];
+    const hiddenImportantColumns = importantColumns.filter(col => !columnVisibility[col]);
+    const visibleImportantColumns = importantColumns.filter(col => columnVisibility[col]);
+    
+    if (hiddenImportantColumns.length > 0 && visibleImportantColumns.length > 0) {
+      // 숨겨진 중요한 컬럼의 너비를 표시된 중요한 컬럼들에 재분배
+      const extraWidthPerColumn = Math.floor(
+        (hiddenImportantColumns.length * 200) / visibleImportantColumns.length
+      );
+      
+      visibleImportantColumns.forEach(columnKey => {
+        newColumnWidths[columnKey] = baseOptimizedWidths[columnKey] + extraWidthPerColumn;
+      });
+    }
+    
+    setColumnWidths(newColumnWidths);
+    setIsOptimized(true);
+    setLastOptimizedColumns([...visibleColumns]);
+  }, [columnVisibility, columnWidths, getVisibleColumns]);
+
+  // 자동 재최적화 (컬럼 가시성 변경 후)
+  const autoReoptimize = useCallback(() => {
+    if (isOptimized && lastOptimizedColumns) {
+      // 이전 최적화 상태와 현재 표시된 컬럼이 다르면 자동 재최적화
+      const currentVisibleColumns = getVisibleColumns();
+      const columnsChanged = 
+        lastOptimizedColumns.length !== currentVisibleColumns.length ||
+        !lastOptimizedColumns.every(col => currentVisibleColumns.includes(col));
+      
+      if (columnsChanged) {
+        optimizeTableLayout();
+      }
+    }
+  }, [isOptimized, lastOptimizedColumns, getVisibleColumns, optimizeTableLayout]);
+
+  // 컬럼 표시/숨김 토글
+  const toggleColumnVisibility = useCallback((columnKey) => {
+    setColumnVisibility(prev => ({
+      ...prev,
+      [columnKey]: !prev[columnKey]
+    }));
+    
+    // 컬럼 가시성이 변경되면 최적화 상태 리셋
+    setIsOptimized(false);
+  }, []);
+
+  // 컬럼 관리 메뉴 토글
+  const toggleColumnManager = useCallback(() => {
+    setShowColumnManager(prev => !prev);
+  }, []);
+
   // 드래그 이벤트 리스너 등록
   useEffect(() => {
     if (dragState.isDragging) {
@@ -307,6 +439,32 @@ const WeeklyReportList = ({ refreshTrigger, onEdit, projectFilter, fullscreen = 
       document.removeEventListener('mouseup', handleMouseUp);
     };
   }, [dragState.isDragging, handleMouseMove, handleMouseUp]);
+
+  // 컬럼 관리 드롭다운 외부 클릭 감지
+  useEffect(() => {
+    const handleClickOutside = (event) => {
+      if (showColumnManager && !event.target.closest('.column-manager-dropdown')) {
+        setShowColumnManager(false);
+      }
+    };
+
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => {
+      document.removeEventListener('mousedown', handleClickOutside);
+    };
+  }, [showColumnManager]);
+
+  // 컬럼 가시성 변경 시 자동 재최적화 체크
+  useEffect(() => {
+    if (isOptimized) {
+      // 200ms 지연으로 사용자가 여러 컬럼을 빠르게 토글할 때 성능 최적화
+      const timer = setTimeout(() => {
+        autoReoptimize();
+      }, 200);
+      
+      return () => clearTimeout(timer);
+    }
+  }, [columnVisibility, isOptimized, autoReoptimize]);
 
   // 인라인 편집 핸들러들 (먼저 선언)
   const startEditing = useCallback((reportId, fieldType, currentValue) => {
@@ -1388,10 +1546,202 @@ Enter: 자동 들여쓰기/리스트 계속"
                     </div>
                   </div>
                   
-                  <div className="text-right">
-                    <div className="text-xs text-gray-600 font-medium">✨ 엑셀 스타일 컬럼 조절 & 인라인 편집</div>
-                    <div className="text-xs text-gray-500">
-                      컬럼 경계 드래그로 크기 조절 • 더블클릭으로 자동 조절 • 내용 클릭으로 바로 편집
+                  <div className="flex items-center gap-4">
+                    {/* 테이블 최적화 버튼 */}
+                    {(() => {
+                      const optimizationStatus = getOptimizationStatus();
+                      const canOptimize = optimizationStatus.canOptimize;
+                      
+                      return (
+                        <div className="relative">
+                          <button
+                            onClick={optimizeTableLayout}
+                            disabled={!canOptimize}
+                            className={`flex items-center gap-2 px-4 py-2 rounded-lg transition-all duration-200 shadow-md hover:shadow-lg ${
+                              !canOptimize 
+                                ? 'bg-gray-400 text-gray-200 cursor-not-allowed'
+                                : isOptimized
+                                  ? 'bg-gradient-to-r from-purple-500 to-indigo-500 text-white hover:from-purple-600 hover:to-indigo-600'
+                                  : 'bg-gradient-to-r from-green-500 to-blue-500 text-white hover:from-green-600 hover:to-blue-600'
+                            }`}
+                            title={
+                              !canOptimize 
+                                ? '최적화할 수 있는 컬럼이 없습니다 (중요한 컬럼을 1개 이상 표시해주세요)'
+                                : isOptimized
+                                  ? '이미 최적화가 적용되었습니다. 클릭하여 재최적화'
+                                  : '중요한 컬럼(이번주 한 일, 다음주 계획, 이슈/리스크)을 확대하고 나머지는 축소'
+                            }
+                          >
+                            {isOptimized ? (
+                              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
+                              </svg>
+                            ) : (
+                              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 8V4m0 0h4M4 4l5 5m11-1V4m0 0h-4m4 0l-5 5M4 16v4m0 0h4m-4 0l5-5m11 5l-5-5m5 5v-4m0 4h-4" />
+                              </svg>
+                            )}
+                            <span className="text-sm font-medium">
+                              {isOptimized ? '최적화 적용됨' : '테이블 최적화'}
+                            </span>
+                            {optimizationStatus.visibleColumnCount < 9 && (
+                              <span className="text-xs bg-white bg-opacity-20 px-2 py-1 rounded-full">
+                                {optimizationStatus.visibleColumnCount}/9
+                              </span>
+                            )}
+                          </button>
+                          
+                          {/* 최적화 상태 인디케이터 */}
+                          {isOptimized && (
+                            <div className="absolute -top-1 -right-1 w-3 h-3 bg-green-400 rounded-full border-2 border-white animate-pulse"></div>
+                          )}
+                        </div>
+                      );
+                    })()}
+                    
+                    {/* 컬럼 관리 버튼 */}
+                    <div className="relative">
+                      <button
+                        onClick={toggleColumnManager}
+                        className={`flex items-center gap-2 px-4 py-2 rounded-lg transition-all duration-200 shadow-md hover:shadow-lg ${
+                          showColumnManager 
+                            ? 'bg-gradient-to-r from-purple-500 to-pink-500 text-white' 
+                            : 'bg-gradient-to-r from-gray-500 to-gray-600 text-white hover:from-gray-600 hover:to-gray-700'
+                        }`}
+                        title="컬럼 표시/숨김 관리"
+                      >
+                        <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 17V7m0 10a2 2 0 01-2 2H5a2 2 0 01-2-2V7a2 2 0 012-2h2a2 2 0 012 2m0 10a2 2 0 002 2h2a2 2 0 002-2M9 7a2 2 0 012-2h2a2 2 0 012 2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v2M9 7h6" />
+                        </svg>
+                        <span className="text-sm font-medium">컬럼 관리</span>
+                        <svg className={`w-4 h-4 transition-transform duration-200 ${showColumnManager ? 'rotate-180' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+                        </svg>
+                      </button>
+                      
+                      {/* 컬럼 관리 드롭다운 */}
+                      {showColumnManager && (
+                        <div className="absolute right-0 top-full mt-2 w-80 bg-white rounded-lg shadow-xl border border-gray-200 z-50 column-manager-dropdown">
+                          <div className="p-4">
+                            <div className="flex items-center justify-between mb-4">
+                              <h3 className="text-lg font-semibold text-gray-900">컬럼 관리</h3>
+                              <div className="text-sm text-gray-500">
+                                {getVisibleColumns().length}/{Object.keys(columnVisibility).length} 표시
+                              </div>
+                            </div>
+                            
+                            <div className="space-y-3 max-h-96 overflow-y-auto">
+                              {Object.entries(columnVisibility).map(([columnKey, visible]) => {
+                                const columnInfo = getColumnInfo(columnKey);
+                                return (
+                                  <div key={columnKey} className={`flex items-center justify-between p-3 rounded-lg transition-all duration-200 ${
+                                    visible ? 'bg-blue-50 border border-blue-200' : 'bg-gray-50 border border-gray-200'
+                                  }`}>
+                                    <div className="flex items-center gap-3">
+                                      <span className="text-lg">{columnInfo.icon}</span>
+                                      <div className="flex flex-col">
+                                        <span className={`text-sm font-medium ${visible ? 'text-blue-900' : 'text-gray-700'}`}>
+                                          {columnInfo.label}
+                                        </span>
+                                        <div className="flex items-center gap-2">
+                                          <span className={`text-xs px-2 py-1 rounded-full ${
+                                            columnInfo.type === 'content' ? 'bg-green-100 text-green-700' :
+                                            columnInfo.type === 'meta' ? 'bg-gray-100 text-gray-700' :
+                                            columnInfo.type === 'link' ? 'bg-purple-100 text-purple-700' :
+                                            'bg-orange-100 text-orange-700'
+                                          }`}>
+                                            {columnInfo.type === 'content' ? '중요' : 
+                                             columnInfo.type === 'meta' ? '메타' : 
+                                             columnInfo.type === 'link' ? '연결' : '액션'}
+                                          </span>
+                                          <span className="text-xs text-gray-500">
+                                            {columnWidths[columnKey]}px
+                                          </span>
+                                        </div>
+                                      </div>
+                                    </div>
+                                    
+                                    <label className="relative inline-flex items-center cursor-pointer">
+                                      <input
+                                        type="checkbox"
+                                        checked={visible}
+                                        onChange={() => toggleColumnVisibility(columnKey)}
+                                        className="sr-only peer"
+                                      />
+                                      <div className="w-11 h-6 bg-gray-200 peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-blue-300 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-blue-600"></div>
+                                    </label>
+                                  </div>
+                                );
+                              })}
+                            </div>
+                            
+                            <div className="mt-4 pt-4 border-t border-gray-200">
+                              {/* 최적화 상태 표시 */}
+                              {isOptimized && (
+                                <div className="mb-3 p-3 bg-green-50 border border-green-200 rounded-lg">
+                                  <div className="flex items-center gap-2 text-sm text-green-800">
+                                    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
+                                    </svg>
+                                    <span className="font-medium">테이블이 최적화되었습니다</span>
+                                  </div>
+                                  <div className="text-xs text-green-600 mt-1">
+                                    컬럼을 변경하면 자동으로 재최적화됩니다
+                                  </div>
+                                </div>
+                              )}
+                              
+                              <div className="flex justify-between items-center">
+                                <div className="flex items-center gap-3">
+                                  <button
+                                    onClick={() => setColumnVisibility(Object.keys(columnVisibility).reduce((acc, key) => ({...acc, [key]: true}), {}))}
+                                    className="text-sm text-blue-600 hover:text-blue-800 font-medium"
+                                  >
+                                    모두 표시
+                                  </button>
+                                  <button
+                                    onClick={() => setColumnVisibility(prev => ({
+                                      ...prev,
+                                      week: false,
+                                      project: false,
+                                      stage: false,
+                                      updated: false,
+                                      actions: false
+                                    }))}
+                                    className="text-sm text-gray-600 hover:text-gray-800 font-medium"
+                                  >
+                                    메타 숨김
+                                  </button>
+                                  {getOptimizationStatus().canOptimize && (
+                                    <button
+                                      onClick={() => {
+                                        optimizeTableLayout();
+                                        toggleColumnManager();
+                                      }}
+                                      className="text-sm text-purple-600 hover:text-purple-800 font-medium"
+                                    >
+                                      🚀 바로 최적화
+                                    </button>
+                                  )}
+                                </div>
+                                <button
+                                  onClick={toggleColumnManager}
+                                  className="px-3 py-1 text-sm bg-gray-200 hover:bg-gray-300 text-gray-700 rounded transition-colors"
+                                >
+                                  닫기
+                                </button>
+                              </div>
+                            </div>
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                    
+                    <div className="text-right">
+                      <div className="text-xs text-gray-600 font-medium">✨ 엑셀 스타일 컬럼 조절 & 인라인 편집</div>
+                      <div className="text-xs text-gray-500">
+                        컬럼 경계 드래그로 크기 조절 • 더블클릭으로 자동 조절 • 내용 클릭으로 바로 편집
+                      </div>
                     </div>
                   </div>
                 </div>
@@ -1404,279 +1754,315 @@ Enter: 자동 들여쓰기/리스트 계속"
                     <thead>
                       <tr className="bg-gray-50 border-b border-gray-200">
                         {/* 주차 컬럼 */}
-                        <th 
-                          className="relative px-4 py-4 text-left text-xs font-semibold text-gray-600 uppercase tracking-wider border-r border-gray-300 select-none"
-                          style={{ width: `${columnWidths.week}px` }}
-                        >
-                          <div className="flex items-center justify-between">
-                            <span>주차</span>
-                            <span className="text-xs text-gray-400">({columnWidths.week}px)</span>
-                          </div>
-                          <div 
-                            className="absolute top-0 right-0 w-1 h-full cursor-col-resize bg-transparent hover:bg-blue-400 transition-colors"
-                            onMouseDown={(e) => handleMouseDown(e, 'week')}
-                            onDoubleClick={() => handleDoubleClick('week')}
-                            title="드래그하여 컬럼 크기 조절 / 더블클릭으로 자동 조절"
-                          />
-                        </th>
+                        {columnVisibility.week && (
+                          <th 
+                            className="relative px-4 py-4 text-left text-xs font-semibold text-gray-600 uppercase tracking-wider border-r border-gray-300 select-none"
+                            style={{ width: `${columnWidths.week}px` }}
+                          >
+                            <div className="flex items-center justify-between">
+                              <span>주차</span>
+                              <span className="text-xs text-gray-400">({columnWidths.week}px)</span>
+                            </div>
+                            <div 
+                              className="absolute top-0 right-0 w-1 h-full cursor-col-resize bg-transparent hover:bg-blue-400 transition-colors"
+                              onMouseDown={(e) => handleMouseDown(e, 'week')}
+                              onDoubleClick={() => handleDoubleClick('week')}
+                              title="드래그하여 컬럼 크기 조절 / 더블클릭으로 자동 조절"
+                            />
+                          </th>
+                        )}
                         
                         {/* 프로젝트 컬럼 */}
-                        <th 
-                          className="relative px-4 py-4 text-left text-xs font-semibold text-gray-600 uppercase tracking-wider border-r border-gray-300 select-none"
-                          style={{ width: `${columnWidths.project}px` }}
-                        >
-                          <div className="flex items-center justify-between">
-                            <span>프로젝트</span>
-                            <span className="text-xs text-gray-400">({columnWidths.project}px)</span>
-                          </div>
-                          <div 
-                            className="absolute top-0 right-0 w-1 h-full cursor-col-resize bg-transparent hover:bg-blue-400 transition-colors"
-                            onMouseDown={(e) => handleMouseDown(e, 'project')}
-                            onDoubleClick={() => handleDoubleClick('project')}
-                            title="드래그하여 컬럼 크기 조절 / 더블클릭으로 자동 조절"
-                          />
-                        </th>
+                        {columnVisibility.project && (
+                          <th 
+                            className="relative px-4 py-4 text-left text-xs font-semibold text-gray-600 uppercase tracking-wider border-r border-gray-300 select-none"
+                            style={{ width: `${columnWidths.project}px` }}
+                          >
+                            <div className="flex items-center justify-between">
+                              <span>프로젝트</span>
+                              <span className="text-xs text-gray-400">({columnWidths.project}px)</span>
+                            </div>
+                            <div 
+                              className="absolute top-0 right-0 w-1 h-full cursor-col-resize bg-transparent hover:bg-blue-400 transition-colors"
+                              onMouseDown={(e) => handleMouseDown(e, 'project')}
+                              onDoubleClick={() => handleDoubleClick('project')}
+                              title="드래그하여 컬럼 크기 조절 / 더블클릭으로 자동 조절"
+                            />
+                          </th>
+                        )}
                         
                         {/* 단계 컬럼 */}
-                        <th 
-                          className="relative px-4 py-4 text-left text-xs font-semibold text-gray-600 uppercase tracking-wider border-r border-gray-300 select-none"
-                          style={{ width: `${columnWidths.stage}px` }}
-                        >
-                          <div className="flex items-center justify-between">
-                            <span>단계</span>
-                            <span className="text-xs text-gray-400">({columnWidths.stage}px)</span>
-                          </div>
-                          <div 
-                            className="absolute top-0 right-0 w-1 h-full cursor-col-resize bg-transparent hover:bg-blue-400 transition-colors"
-                            onMouseDown={(e) => handleMouseDown(e, 'stage')}
-                            onDoubleClick={() => handleDoubleClick('stage')}
-                            title="드래그하여 컬럼 크기 조절 / 더블클릭으로 자동 조절"
-                          />
-                        </th>
+                        {columnVisibility.stage && (
+                          <th 
+                            className="relative px-4 py-4 text-left text-xs font-semibold text-gray-600 uppercase tracking-wider border-r border-gray-300 select-none"
+                            style={{ width: `${columnWidths.stage}px` }}
+                          >
+                            <div className="flex items-center justify-between">
+                              <span>단계</span>
+                              <span className="text-xs text-gray-400">({columnWidths.stage}px)</span>
+                            </div>
+                            <div 
+                              className="absolute top-0 right-0 w-1 h-full cursor-col-resize bg-transparent hover:bg-blue-400 transition-colors"
+                              onMouseDown={(e) => handleMouseDown(e, 'stage')}
+                              onDoubleClick={() => handleDoubleClick('stage')}
+                              title="드래그하여 컬럼 크기 조절 / 더블클릭으로 자동 조절"
+                            />
+                          </th>
+                        )}
                         
                         {/* 이번 주 한 일 컬럼 */}
-                        <th 
-                          className="relative px-4 py-4 text-left text-xs font-semibold text-gray-600 uppercase tracking-wider border-r border-gray-300 select-none"
-                          style={{ width: `${columnWidths.thisWeek}px` }}
-                        >
-                          <div className="flex flex-col gap-1">
-                            <div className="flex items-center gap-2">
-                              <span>이번 주 한 일</span>
-                              <span className="inline-flex items-center px-2 py-1 rounded-full text-xs font-medium bg-blue-100 text-blue-800">
-                                주요
-                              </span>
+                        {columnVisibility.thisWeek && (
+                          <th 
+                            className="relative px-4 py-4 text-left text-xs font-semibold text-gray-600 uppercase tracking-wider border-r border-gray-300 select-none"
+                            style={{ width: `${columnWidths.thisWeek}px` }}
+                          >
+                            <div className="flex flex-col gap-1">
+                              <div className="flex items-center gap-2">
+                                <span>이번 주 한 일</span>
+                                <span className="inline-flex items-center px-2 py-1 rounded-full text-xs font-medium bg-blue-100 text-blue-800">
+                                  주요
+                                </span>
+                              </div>
+                              <span className="text-xs text-gray-400">({columnWidths.thisWeek}px)</span>
                             </div>
-                            <span className="text-xs text-gray-400">({columnWidths.thisWeek}px)</span>
-                          </div>
-                          <div 
-                            className="absolute top-0 right-0 w-1 h-full cursor-col-resize bg-transparent hover:bg-blue-400 transition-colors"
-                            onMouseDown={(e) => handleMouseDown(e, 'thisWeek')}
-                            onDoubleClick={() => handleDoubleClick('thisWeek')}
-                            title="드래그하여 컬럼 크기 조절 / 더블클릭으로 자동 조절"
-                          />
-                        </th>
+                            <div 
+                              className="absolute top-0 right-0 w-1 h-full cursor-col-resize bg-transparent hover:bg-blue-400 transition-colors"
+                              onMouseDown={(e) => handleMouseDown(e, 'thisWeek')}
+                              onDoubleClick={() => handleDoubleClick('thisWeek')}
+                              title="드래그하여 컬럼 크기 조절 / 더블클릭으로 자동 조절"
+                            />
+                          </th>
+                        )}
                         
                         {/* 다음 주 계획 컬럼 */}
-                        <th 
-                          className="relative px-4 py-4 text-left text-xs font-semibold text-gray-600 uppercase tracking-wider border-r border-gray-300 select-none"
-                          style={{ width: `${columnWidths.nextWeek}px` }}
-                        >
-                          <div className="flex flex-col gap-1">
-                            <div className="flex items-center gap-2">
-                              <span>다음 주 계획</span>
-                              <span className="inline-flex items-center px-2 py-1 rounded-full text-xs font-medium bg-green-100 text-green-800">
-                                주요
-                              </span>
+                        {columnVisibility.nextWeek && (
+                          <th 
+                            className="relative px-4 py-4 text-left text-xs font-semibold text-gray-600 uppercase tracking-wider border-r border-gray-300 select-none"
+                            style={{ width: `${columnWidths.nextWeek}px` }}
+                          >
+                            <div className="flex flex-col gap-1">
+                              <div className="flex items-center gap-2">
+                                <span>다음 주 계획</span>
+                                <span className="inline-flex items-center px-2 py-1 rounded-full text-xs font-medium bg-green-100 text-green-800">
+                                  주요
+                                </span>
+                              </div>
+                              <span className="text-xs text-gray-400">({columnWidths.nextWeek}px)</span>
                             </div>
-                            <span className="text-xs text-gray-400">({columnWidths.nextWeek}px)</span>
-                          </div>
-                          <div 
-                            className="absolute top-0 right-0 w-1 h-full cursor-col-resize bg-transparent hover:bg-blue-400 transition-colors"
-                            onMouseDown={(e) => handleMouseDown(e, 'nextWeek')}
-                            onDoubleClick={() => handleDoubleClick('nextWeek')}
-                            title="드래그하여 컬럼 크기 조절 / 더블클릭으로 자동 조절"
-                          />
-                        </th>
+                            <div 
+                              className="absolute top-0 right-0 w-1 h-full cursor-col-resize bg-transparent hover:bg-blue-400 transition-colors"
+                              onMouseDown={(e) => handleMouseDown(e, 'nextWeek')}
+                              onDoubleClick={() => handleDoubleClick('nextWeek')}
+                              title="드래그하여 컬럼 크기 조절 / 더블클릭으로 자동 조절"
+                            />
+                          </th>
+                        )}
                         
                         {/* 이슈/리스크 컬럼 */}
-                        <th 
-                          className="relative px-4 py-4 text-left text-xs font-semibold text-gray-600 uppercase tracking-wider border-r border-gray-300 select-none"
-                          style={{ width: `${columnWidths.issues}px` }}
-                        >
-                          <div className="flex items-center justify-between">
-                            <span>이슈/리스크</span>
-                            <span className="text-xs text-gray-400">({columnWidths.issues}px)</span>
-                          </div>
-                          <div 
-                            className="absolute top-0 right-0 w-1 h-full cursor-col-resize bg-transparent hover:bg-blue-400 transition-colors"
-                            onMouseDown={(e) => handleMouseDown(e, 'issues')}
-                            onDoubleClick={() => handleDoubleClick('issues')}
-                            title="드래그하여 컬럼 크기 조절 / 더블클릭으로 자동 조절"
-                          />
-                        </th>
+                        {columnVisibility.issues && (
+                          <th 
+                            className="relative px-4 py-4 text-left text-xs font-semibold text-gray-600 uppercase tracking-wider border-r border-gray-300 select-none"
+                            style={{ width: `${columnWidths.issues}px` }}
+                          >
+                            <div className="flex items-center justify-between">
+                              <span>이슈/리스크</span>
+                              <span className="text-xs text-gray-400">({columnWidths.issues}px)</span>
+                            </div>
+                            <div 
+                              className="absolute top-0 right-0 w-1 h-full cursor-col-resize bg-transparent hover:bg-blue-400 transition-colors"
+                              onMouseDown={(e) => handleMouseDown(e, 'issues')}
+                              onDoubleClick={() => handleDoubleClick('issues')}
+                              title="드래그하여 컬럼 크기 조절 / 더블클릭으로 자동 조절"
+                            />
+                          </th>
+                        )}
 
                         {/* 관련 상세 업무 컬럼 */}
-                        <th 
-                          className="relative px-4 py-4 text-left text-xs font-semibold text-gray-600 uppercase tracking-wider border-r border-gray-300 select-none"
-                          style={{ width: `${columnWidths.detailedTasks}px` }}
-                        >
-                          <div className="flex flex-col gap-1">
-                            <div className="flex items-center gap-2">
-                              <span>관련 상세 업무</span>
-                              <span className="inline-flex items-center px-2 py-1 rounded-full text-xs font-medium bg-purple-100 text-purple-800">
-                                연동
-                              </span>
+                        {columnVisibility.detailedTasks && (
+                          <th 
+                            className="relative px-4 py-4 text-left text-xs font-semibold text-gray-600 uppercase tracking-wider border-r border-gray-300 select-none"
+                            style={{ width: `${columnWidths.detailedTasks}px` }}
+                          >
+                            <div className="flex flex-col gap-1">
+                              <div className="flex items-center gap-2">
+                                <span>관련 상세 업무</span>
+                                <span className="inline-flex items-center px-2 py-1 rounded-full text-xs font-medium bg-purple-100 text-purple-800">
+                                  연동
+                                </span>
+                              </div>
+                              <span className="text-xs text-gray-400">({columnWidths.detailedTasks}px)</span>
                             </div>
-                            <span className="text-xs text-gray-400">({columnWidths.detailedTasks}px)</span>
-                          </div>
-                          <div 
-                            className="absolute top-0 right-0 w-1 h-full cursor-col-resize bg-transparent hover:bg-blue-400 transition-colors"
-                            onMouseDown={(e) => handleMouseDown(e, 'detailedTasks')}
-                            onDoubleClick={() => handleDoubleClick('detailedTasks')}
-                            title="드래그하여 컬럼 크기 조절 / 더블클릭으로 자동 조절"
-                          />
-                        </th>
+                            <div 
+                              className="absolute top-0 right-0 w-1 h-full cursor-col-resize bg-transparent hover:bg-blue-400 transition-colors"
+                              onMouseDown={(e) => handleMouseDown(e, 'detailedTasks')}
+                              onDoubleClick={() => handleDoubleClick('detailedTasks')}
+                              title="드래그하여 컬럼 크기 조절 / 더블클릭으로 자동 조절"
+                            />
+                          </th>
+                        )}
                         
                         {/* 수정일 컬럼 */}
-                        <th 
-                          className="relative px-4 py-4 text-left text-xs font-semibold text-gray-600 uppercase tracking-wider border-r border-gray-300 select-none"
-                          style={{ width: `${columnWidths.updated}px` }}
-                        >
-                          <div className="flex items-center justify-between">
-                            <span>수정일</span>
-                            <span className="text-xs text-gray-400">({columnWidths.updated}px)</span>
-                          </div>
-                          <div 
-                            className="absolute top-0 right-0 w-1 h-full cursor-col-resize bg-transparent hover:bg-blue-400 transition-colors"
-                            onMouseDown={(e) => handleMouseDown(e, 'updated')}
-                            onDoubleClick={() => handleDoubleClick('updated')}
-                            title="드래그하여 컬럼 크기 조절 / 더블클릭으로 자동 조절"
-                          />
-                        </th>
+                        {columnVisibility.updated && (
+                          <th 
+                            className="relative px-4 py-4 text-left text-xs font-semibold text-gray-600 uppercase tracking-wider border-r border-gray-300 select-none"
+                            style={{ width: `${columnWidths.updated}px` }}
+                          >
+                            <div className="flex items-center justify-between">
+                              <span>수정일</span>
+                              <span className="text-xs text-gray-400">({columnWidths.updated}px)</span>
+                            </div>
+                            <div 
+                              className="absolute top-0 right-0 w-1 h-full cursor-col-resize bg-transparent hover:bg-blue-400 transition-colors"
+                              onMouseDown={(e) => handleMouseDown(e, 'updated')}
+                              onDoubleClick={() => handleDoubleClick('updated')}
+                              title="드래그하여 컬럼 크기 조절 / 더블클릭으로 자동 조절"
+                            />
+                          </th>
+                        )}
                         
                         {/* 액션 컬럼 */}
-                        <th 
-                          className="relative px-4 py-4 text-center text-xs font-semibold text-gray-600 uppercase tracking-wider select-none"
-                          style={{ width: `${columnWidths.actions}px` }}
-                        >
-                          <div className="flex items-center justify-center gap-2">
-                            <span>액션</span>
-                            <span className="text-xs text-gray-400">({columnWidths.actions}px)</span>
-                          </div>
-                        </th>
+                        {columnVisibility.actions && (
+                          <th 
+                            className="relative px-4 py-4 text-center text-xs font-semibold text-gray-600 uppercase tracking-wider select-none"
+                            style={{ width: `${columnWidths.actions}px` }}
+                          >
+                            <div className="flex items-center justify-center gap-2">
+                              <span>액션</span>
+                              <span className="text-xs text-gray-400">({columnWidths.actions}px)</span>
+                            </div>
+                          </th>
+                        )}
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-gray-200">
                       {Array.isArray(reports) && reports.map((report, index) => (
                         <tr key={report.id} className={`hover:bg-blue-50 transition-all duration-200 ${index % 2 === 0 ? 'bg-white' : 'bg-gray-25'}`}>
                           {/* 주차 컬럼 */}
-                          <td className="px-4 py-5 border-r border-gray-200" style={{ width: `${columnWidths.week}px` }}>
-                            <div className="flex flex-col items-start">
-                              <span className="text-sm font-bold text-blue-700 bg-blue-100 px-2 py-1 rounded-lg">
-                                {report.week}
-                              </span>
-                              <span className="text-xs text-gray-500 mt-1">
-                                {utilsAPI.getWeekDateRange(report.week)?.startString}
-                              </span>
-                            </div>
-                          </td>
+                          {columnVisibility.week && (
+                            <td className="px-4 py-5 border-r border-gray-200" style={{ width: `${columnWidths.week}px` }}>
+                              <div className="flex flex-col items-start">
+                                <span className="text-sm font-bold text-blue-700 bg-blue-100 px-2 py-1 rounded-lg">
+                                  {report.week}
+                                </span>
+                                <span className="text-xs text-gray-500 mt-1">
+                                  {utilsAPI.getWeekDateRange(report.week)?.startString}
+                                </span>
+                              </div>
+                            </td>
+                          )}
                           
                           {/* 프로젝트 컬럼 */}
-                          <td className="px-4 py-5 border-r border-gray-200" style={{ width: `${columnWidths.project}px` }}>
-                            <div className="text-sm font-semibold text-gray-900 break-words overflow-hidden">
-                              {report.project}
-                            </div>
-                          </td>
+                          {columnVisibility.project && (
+                            <td className="px-4 py-5 border-r border-gray-200" style={{ width: `${columnWidths.project}px` }}>
+                              <div className="text-sm font-semibold text-gray-900 break-words overflow-hidden">
+                                {report.project}
+                              </div>
+                            </td>
+                          )}
                           
                           {/* 단계 컬럼 */}
-                          <td className="px-4 py-5 border-r border-gray-200" style={{ width: `${columnWidths.stage}px` }}>
-                            <span className="inline-flex items-center px-2 py-1 rounded-full text-xs font-medium bg-indigo-100 text-indigo-800">
-                              {report.stage}
-                            </span>
-                          </td>
+                          {columnVisibility.stage && (
+                            <td className="px-4 py-5 border-r border-gray-200" style={{ width: `${columnWidths.stage}px` }}>
+                              <span className="inline-flex items-center px-2 py-1 rounded-full text-xs font-medium bg-indigo-100 text-indigo-800">
+                                {report.stage}
+                              </span>
+                            </td>
+                          )}
                           
                           {/* 이번 주 한 일 컬럼 */}
-                          <td className="px-4 py-5 border-r border-gray-200" style={{ width: `${columnWidths.thisWeek}px` }}>
-                            <div className="bg-gray-50 p-3 rounded-lg">
-                              {renderEditableCell(
-                                report.this_week_work, 
-                                report.id, 
-                                'this_week_work', 
-                                Math.max(100, Math.floor(columnWidths.thisWeek / 4)), // 동적 텍스트 길이
-                                'text-gray-900', 
-                                'gray'
-                              )}
-                            </div>
-                          </td>
+                          {columnVisibility.thisWeek && (
+                            <td className="px-4 py-5 border-r border-gray-200" style={{ width: `${columnWidths.thisWeek}px` }}>
+                              <div className="bg-gray-50 p-3 rounded-lg">
+                                {renderEditableCell(
+                                  report.this_week_work, 
+                                  report.id, 
+                                  'this_week_work', 
+                                  Math.max(100, Math.floor(columnWidths.thisWeek / 4)), // 동적 텍스트 길이
+                                  'text-gray-900', 
+                                  'gray'
+                                )}
+                              </div>
+                            </td>
+                          )}
                           
                           {/* 다음 주 계획 컬럼 */}
-                          <td className="px-4 py-5 border-r border-gray-200" style={{ width: `${columnWidths.nextWeek}px` }}>
-                            <div className="bg-blue-50 p-3 rounded-lg">
-                              {renderEditableCell(
-                                report.next_week_plan, 
-                                report.id, 
-                                'next_week_plan', 
-                                Math.max(100, Math.floor(columnWidths.nextWeek / 4)), // 동적 텍스트 길이
-                                'text-blue-700', 
-                                'blue'
-                              )}
-                            </div>
-                          </td>
+                          {columnVisibility.nextWeek && (
+                            <td className="px-4 py-5 border-r border-gray-200" style={{ width: `${columnWidths.nextWeek}px` }}>
+                              <div className="bg-blue-50 p-3 rounded-lg">
+                                {renderEditableCell(
+                                  report.next_week_plan, 
+                                  report.id, 
+                                  'next_week_plan', 
+                                  Math.max(100, Math.floor(columnWidths.nextWeek / 4)), // 동적 텍스트 길이
+                                  'text-blue-700', 
+                                  'blue'
+                                )}
+                              </div>
+                            </td>
+                          )}
                           
                           {/* 이슈/리스크 컬럼 */}
-                          <td className="px-4 py-5 border-r border-gray-200" style={{ width: `${columnWidths.issues}px` }}>
-                            <div className="bg-red-50 p-3 rounded-lg">
-                              {renderEditableCell(
-                                report.issues_risks, 
-                                report.id, 
-                                'issues_risks', 
-                                Math.max(80, Math.floor(columnWidths.issues / 3)), // 동적 텍스트 길이
-                                'text-red-700', 
-                                'red'
-                              )}
-                            </div>
-                          </td>
+                          {columnVisibility.issues && (
+                            <td className="px-4 py-5 border-r border-gray-200" style={{ width: `${columnWidths.issues}px` }}>
+                              <div className="bg-red-50 p-3 rounded-lg">
+                                {renderEditableCell(
+                                  report.issues_risks, 
+                                  report.id, 
+                                  'issues_risks', 
+                                  Math.max(80, Math.floor(columnWidths.issues / 3)), // 동적 텍스트 길이
+                                  'text-red-700', 
+                                  'red'
+                                )}
+                              </div>
+                            </td>
+                          )}
 
                           {/* 관련 상세 업무 컬럼 */}
-                          <td className="px-4 py-5 border-r border-gray-200" style={{ width: `${columnWidths.detailedTasks}px` }}>
-                            <div className="bg-purple-50 p-3 rounded-lg">
-                              {renderDetailedTaskSelector(report)}
-                            </div>
-                          </td>
+                          {columnVisibility.detailedTasks && (
+                            <td className="px-4 py-5 border-r border-gray-200" style={{ width: `${columnWidths.detailedTasks}px` }}>
+                              <div className="bg-purple-50 p-3 rounded-lg">
+                                {renderDetailedTaskSelector(report)}
+                              </div>
+                            </td>
+                          )}
                           
                           {/* 수정일 컬럼 */}
-                          <td className="px-4 py-5 text-xs text-gray-500 border-r border-gray-200" style={{ width: `${columnWidths.updated}px` }}>
-                            <div className="overflow-hidden text-ellipsis">
-                              {new Date(report.updated_at).toLocaleDateString('ko-KR', {
-                                month: 'short',
-                                day: 'numeric'
-                              })}
-                            </div>
-                          </td>
+                          {columnVisibility.updated && (
+                            <td className="px-4 py-5 text-xs text-gray-500 border-r border-gray-200" style={{ width: `${columnWidths.updated}px` }}>
+                              <div className="overflow-hidden text-ellipsis">
+                                {new Date(report.updated_at).toLocaleDateString('ko-KR', {
+                                  month: 'short',
+                                  day: 'numeric'
+                                })}
+                              </div>
+                            </td>
+                          )}
                           
                           {/* 액션 컬럼 */}
-                          <td className="px-4 py-5" style={{ width: `${columnWidths.actions}px` }}>
-                            <div className="flex justify-center gap-1">
-                              <button
-                                onClick={() => handleEdit(report)}
-                                className="p-1 text-blue-600 hover:text-white hover:bg-blue-600 rounded-lg transition-all duration-200"
-                                title="수정"
-                              >
-                                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
-                                </svg>
-                              </button>
-                              <button
-                                onClick={() => setDeleteConfirm(report.id)}
-                                className="p-1 text-red-600 hover:text-white hover:bg-red-600 rounded-lg transition-all duration-200"
-                                title="삭제"
-                              >
-                                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1-1H8a1 1 0 00-1 1v3M4 7h16" />
-                                </svg>
-                              </button>
-                            </div>
-                          </td>
+                          {columnVisibility.actions && (
+                            <td className="px-4 py-5" style={{ width: `${columnWidths.actions}px` }}>
+                              <div className="flex justify-center gap-1">
+                                <button
+                                  onClick={() => handleEdit(report)}
+                                  className="p-1 text-blue-600 hover:text-white hover:bg-blue-600 rounded-lg transition-all duration-200"
+                                  title="수정"
+                                >
+                                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
+                                  </svg>
+                                </button>
+                                <button
+                                  onClick={() => setDeleteConfirm(report.id)}
+                                  className="p-1 text-red-600 hover:text-white hover:bg-red-600 rounded-lg transition-all duration-200"
+                                  title="삭제"
+                                >
+                                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1-1H8a1 1 0 00-1 1v3M4 7h16" />
+                                  </svg>
+                                </button>
+                              </div>
+                            </td>
+                          )}
                         </tr>
                       ))}
                     </tbody>
