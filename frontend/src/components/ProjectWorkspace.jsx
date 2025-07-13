@@ -4,6 +4,7 @@ import WeeklyReportList from './WeeklyReportList';
 import DetailedTaskSheet from './DetailedTaskSheet';
 import SummaryViewer from './SummaryViewer';
 import ProjectTimeline from './ProjectTimeline';
+import WBSWorkspaceTab from './WBSWorkspaceTab';
 import { projectAPI, summaryAPI } from '../services/api';
 
 const ProjectWorkspace = ({ refreshTrigger, onDataChange }) => {
@@ -131,7 +132,8 @@ const ProjectWorkspace = ({ refreshTrigger, onDataChange }) => {
     { id: 'overview', name: '프로젝트 개요', icon: '📊' },
     { id: 'reports', name: '주간 보고서', icon: '📝' },
     { id: 'tasks', name: '상세 업무', icon: '📋' },
-    { id: 'timeline', name: '진행 타임라인', icon: '📅' }
+    { id: 'timeline', name: '진행 타임라인', icon: '📅' },
+    { id: 'wbs', name: 'WBS', icon: '🗂️' }, // WBS 탭 추가
   ];
 
   const renderWorkspaceContent = () => {
@@ -259,6 +261,11 @@ const ProjectWorkspace = ({ refreshTrigger, onDataChange }) => {
               refreshTrigger={refreshTrigger}
               />
           </div>
+        );
+
+      case 'wbs':
+        return (
+          <WBSWorkspaceTab project={selectedProject} />
         );
 
       default:
