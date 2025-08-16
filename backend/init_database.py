@@ -16,7 +16,7 @@ from sqlalchemy.orm import sessionmaker
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
 from database import engine, Base, SQLALCHEMY_DATABASE_URL
-from models import ProjectDB, WeeklyReportDB
+from models import ProjectDB, WeeklyReportDB, WBSTaskDB # WBSTaskDB 추가
 
 
 def clear_database():
@@ -26,7 +26,7 @@ def clear_database():
 
     try:
         # 데이터베이스 파일 경로 추출
-        db_path = SQLALCHEMY_DATABASE_URL.replace("sqlite:///", "")
+        db_path = SQLALCHEMY_DATABASE_URL.replace("sqlite:////", "")
 
         # 연결 종료
         engine.dispose()
@@ -67,7 +67,8 @@ def create_tables_force():
 
         print(f"✅ 생성된 테이블: {tables}")
 
-        if "projects" in tables and "weekly_reports" in tables:
+        # wbs_tasks 테이블 확인 추가
+        if "projects" in tables and "weekly_reports" in tables and "wbs_tasks" in tables:
             print("🎉 모든 테이블이 성공적으로 생성되었습니다!")
 
             # 각 테이블의 컬럼 정보 출력
@@ -108,8 +109,8 @@ def insert_sample_data():
             ProjectDB(
                 name="AI 챗봇 개발",
                 description="고객 서비스용 AI 챗봇 시스템 개발",
-                start_date=date(2024, 1, 1),
-                end_date=date(2024, 12, 31),
+                start_date=date(2024, 7, 1),
+                end_date=date(2024, 9, 30),
                 status="active",
                 priority="high",
                 manager="김개발",
@@ -120,8 +121,8 @@ def insert_sample_data():
             ProjectDB(
                 name="웹사이트 리뉴얼",
                 description="회사 홈페이지 전면 개편",
-                start_date=date(2024, 2, 1),
-                end_date=date(2024, 8, 31),
+                start_date=date(2024, 8, 1),
+                end_date=date(2024, 11, 30),
                 status="planning",
                 priority="medium",
                 manager="박웹",
@@ -133,20 +134,25 @@ def insert_sample_data():
 
         for project in sample_projects:
             db.add(project)
+        db.commit()
 
         # 샘플 주차별 보고서 생성
+        # project_id를 사용하기 위해 프로젝트를 다시 조회
+        proj1 = db.query(ProjectDB).filter(ProjectDB.name == "AI 챗봇 개발").one()
+        proj2 = db.query(ProjectDB).filter(ProjectDB.name == "웹사이트 리뉴얼").one()
+
         sample_reports = [
             WeeklyReportDB(
-                project="AI 챗봇 개발",
-                week="2024-W01",
+                project_id=proj1.id,
+                week="2024-W28",
                 stage="설계",
                 this_week_work="요구사항 분석 및 시스템 아키텍처 설계",
                 next_week_plan="데이터베이스 스키마 설계",
                 issues_risks="일정이 타이트함",
             ),
             WeeklyReportDB(
-                project="AI 챗봇 개발",
-                week="2024-W02",
+                project_id=proj1.id,
+                week="2024-W29",
                 stage="개발",
                 this_week_work="기본 모델 구현 및 테스트",
                 next_week_plan="UI 개발 시작",
@@ -156,15 +162,54 @@ def insert_sample_data():
 
         for report in sample_reports:
             db.add(report)
+        db.commit()
 
+        # 샘플 WBS 태스크 생성
+        sample_wbs_tasks = [
+            # AI 챗봇 개발 프로젝트 태스크
+            WBSTaskDB(project_id=proj1.id, parent_id=None, text='화면 기획', start_date=date(2024, 7, 9), end_date=date(2024, 7, 15), progress=20, sort_order=0),
+            WBSTaskDB(project_id=proj1.id, parent_id=None, text='화면 디자인', start_date=date(2024, 7, 10), end_date=date(2024, 7, 25), progress=50, sort_order=1),
+            WBSTaskDB(project_id=proj1.id, parent_id=None, text='퍼블리싱', start_date=date(2024, 7, 14), end_date=date(2024, 8, 5), progress=0, sort_order=2),
+            WBSTaskDB(project_id=proj1.id, parent_id=None, text='프로젝트 관리', start_date=date(2024, 7, 9), end_date=date(2024, 8, 10), progress=100, sort_order=3),
+        ]
+        db.bulk_save_objects(sample_wbs_tasks, return_defaults=True)
+        db.commit()
+
+        # 부모-자식 관계 설정
+        parent1 = db.query(WBSTaskDB).filter(WBSTaskDB.text == '화면 기획').one()
+        parent2 = db.query(WBSTaskDB).filter(WBSTaskDB.text == '화면 디자인').one()
+        parent3 = db.query(WBSTaskDB).filter(WBSTaskDB.text == '퍼블리싱').one()
+        parent4 = db.query(WBSTaskDB).filter(WBSTaskDB.text == '프로젝트 관리').one()
+
+        sub_tasks = [
+            WBSTaskDB(project_id=proj1.id, parent_id=parent1.id, text='화면설계', start_date=date(2024, 7, 9), end_date=date(2024, 7, 15), progress=30, sort_order=0),
+            WBSTaskDB(project_id=proj1.id, parent_id=parent2.id, text='상세화면 디자인', start_date=date(2024, 7, 12), end_date=date(2024, 7, 20), progress=60, sort_order=0),
+            WBSTaskDB(project_id=proj1.id, parent_id=parent3.id, text='컴포넌트 마크업', start_date=date(2024, 7, 14), end_date=date(2024, 7, 28), progress=10, sort_order=0),
+            WBSTaskDB(project_id=proj1.id, parent_id=parent4.id, text='중간 보고', start_date=date(2024, 7, 18), end_date=date(2024, 7, 18), progress=100, sort_order=0),
+        ]
+        db.bulk_save_objects(sub_tasks, return_defaults=True)
+        db.commit()
+
+        parent1_1 = db.query(WBSTaskDB).filter(WBSTaskDB.text == '화면설계').one()
+        parent2_1 = db.query(WBSTaskDB).filter(WBSTaskDB.text == '상세화면 디자인').one()
+        parent3_1 = db.query(WBSTaskDB).filter(WBSTaskDB.text == '컴포넌트 마크업').one()
+
+        sub_sub_tasks = [
+            WBSTaskDB(project_id=proj1.id, parent_id=parent1_1.id, text='전체일정', start_date=date(2024, 7, 9), end_date=date(2024, 7, 12), progress=40, sort_order=0),
+            WBSTaskDB(project_id=proj1.id, parent_id=parent2_1.id, text='디자인 시스템 정의', start_date=date(2024, 7, 12), end_date=date(2024, 7, 18), progress=70, sort_order=0),
+            WBSTaskDB(project_id=proj1.id, parent_id=parent3_1.id, text='공통 컴포넌트', start_date=date(2024, 7, 14), end_date=date(2024, 7, 22), progress=20, sort_order=0),
+        ]
+        db.bulk_save_objects(sub_sub_tasks, return_defaults=True)
         db.commit()
 
         # 데이터 확인
         project_count = db.query(ProjectDB).count()
         report_count = db.query(WeeklyReportDB).count()
+        wbs_task_count = db.query(WBSTaskDB).count()
 
         print(f"✅ 샘플 프로젝트 {project_count}개 생성됨")
         print(f"✅ 샘플 보고서 {report_count}개 생성됨")
+        print(f"✅ 샘플 WBS 태스크 {wbs_task_count}개 생성됨")
 
         db.close()
         return True

@@ -11,6 +11,14 @@ const api = axios.create({
   },
 });
 
+// WBS 태스크 API 함수들
+export const wbsTaskAPI = {
+  getTasks: (projectId) => api.get(`/wbs-tasks/${projectId}`),
+  createTask: (taskData) => api.post('/wbs-tasks/', taskData),
+  updateTask: (taskId, taskData) => api.put(`/wbs-tasks/${taskId}`, taskData),
+  deleteTask: (taskId) => api.delete(`/wbs-tasks/${taskId}`),
+};
+
 // 프로젝트 관리 API 함수들
 export const projectAPI = {
   // 모든 프로젝트 조회 (필터링 지원)
@@ -401,4 +409,4 @@ export const utilsAPI = {
   }
 };
 
-export default api; 
+export default api;

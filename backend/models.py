@@ -330,3 +330,70 @@ class DetailedTaskFilter(BaseModel):
 
 class WeeklyReportDetailedTasksUpdate(BaseModel):
     detailed_task_ids: List[int] = Field(..., description="연결할 상세 업무 ID 목록")
+
+
+# --------------------------------------------------------------------------
+# WBS / Gantt Chart Task 모델
+# --------------------------------------------------------------------------
+
+# WBS 태스크 DB 모델
+class WBSTaskDB(Base):
+    __tablename__ = "wbs_tasks"
+
+    id = Column(Integer, primary_key=True, index=True)
+    text = Column(String(255), nullable=False)
+    start_date = Column(Date, nullable=False)
+    end_date = Column(Date, nullable=False)
+    progress = Column(Integer, default=0)
+    deliverables = Column(Text)  # 산출물
+    remarks = Column(Text)  # 비고
+    sort_order = Column(Integer, default=0)  # 정렬 순서
+
+    project_id = Column(Integer, ForeignKey("projects.id"), nullable=False)
+    parent_id = Column(Integer, ForeignKey("wbs_tasks.id"), nullable=True)
+
+    project = relationship("ProjectDB", back_populates="wbs_tasks")
+    parent = relationship("WBSTaskDB", remote_side=[id], back_populates="children")
+    children = relationship("WBSTaskDB", back_populates="parent", cascade="all, delete-orphan")
+
+# ProjectDB에 wbs_tasks 관계 추가
+ProjectDB.wbs_tasks = relationship("WBSTaskDB", back_populates="project", cascade="all, delete-orphan")
+
+
+# WBS 태스크 Pydantic 모델
+class WBSTaskBase(BaseModel):
+    text: str
+    start_date: date
+    end_date: date
+    progress: int = Field(0, ge=0, le=100)
+    deliverables: Optional[str] = None
+    remarks: Optional[str] = None
+    parent_id: Optional[int] = None
+    project_id: int
+    sort_order: Optional[int] = 0
+
+    class Config:
+        from_attributes = True
+
+
+class WBSTaskCreate(WBSTaskBase):
+    pass
+
+
+class WBSTaskUpdate(BaseModel):
+    text: Optional[str] = None
+    start_date: Optional[date] = None
+    end_date: Optional[date] = None
+    progress: Optional[int] = Field(None, ge=0, le=100)
+    deliverables: Optional[str] = None
+    remarks: Optional[str] = None
+    parent_id: Optional[int] = None
+    sort_order: Optional[int] = None
+
+
+class WBSTaskResponse(WBSTaskBase):
+    id: int
+    children: List['WBSTaskResponse'] = []
+
+# 재귀적 모델을 위한 참조 업데이트
+# WBSTaskResponse.model_rebuild()

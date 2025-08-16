@@ -8,10 +8,10 @@ from database import engine, Base
 # 🎉 설정 분리: 하드코딩 제거!
 from config import settings, validate_settings
 
-from routers import tasks, summary, export, projects, detailed_tasks
+from routers import tasks, summary, export, projects, detailed_tasks, wbs_tasks
 
 # 모델들을 import해야 Base.metadata에 등록됨
-from models import ProjectDB, WeeklyReportDB, DetailedTaskDB
+from models import ProjectDB, WeeklyReportDB, DetailedTaskDB, WBSTaskDB
 
 # 🔧 동적 로깅 설정 (환경 변수 기반)
 logging.basicConfig(
@@ -36,7 +36,7 @@ def ensure_database_initialized():
         inspector = inspect(engine)
         existing_tables = inspector.get_table_names()
 
-        required_tables = ["projects", "weekly_reports", "detailed_tasks", "weekly_report_detailed_tasks"]
+        required_tables = ["projects", "weekly_reports", "detailed_tasks", "weekly_report_detailed_tasks", "wbs_tasks"]
         missing_tables = [table for table in required_tables if table not in existing_tables]
 
         if missing_tables:
@@ -87,6 +87,7 @@ app.add_middleware(
 app.include_router(projects.router)
 app.include_router(tasks.router)  # /weekly-reports
 app.include_router(detailed_tasks.router)  # /detailed-tasks
+app.include_router(wbs_tasks.router) # /wbs-tasks
 app.include_router(summary.router)  # /summary
 app.include_router(export.router)  # /export
 
@@ -98,7 +99,7 @@ def read_root():
         "version": "1.0.0",
         "environment": "development" if settings.is_development else "production",
         "docs": "/docs",
-        "features": ["프로젝트 관리", "주차별 보고서 관리", "통계 및 요약", "CSV 내보내기"],
+        "features": ["프로젝트 관리", "주차별 보고서 관리", "통계 및 요약", "CSV 내보내기", "WBS/Gantt 관리"],
     }
 
 
