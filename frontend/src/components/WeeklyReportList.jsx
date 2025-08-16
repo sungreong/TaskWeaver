@@ -4,6 +4,7 @@ import remarkGfm from 'remark-gfm';
 import rehypeRaw from 'rehype-raw';
 import rehypeSanitize from 'rehype-sanitize';
 import { weeklyReportAPI, summaryAPI, utilsAPI, detailedTaskAPI } from '../services/api';
+import EditReportModal from './EditReportModal';
 
 const WeeklyReportList = ({ refreshTrigger, onEdit, projectFilter, fullscreen = false }) => {
   const [reports, setReports] = useState([]);
@@ -69,6 +70,12 @@ const WeeklyReportList = ({ refreshTrigger, onEdit, projectFilter, fullscreen = 
   // 마크다운 편집 모드 상태 관리
   const [previewMode, setPreviewMode] = useState({}); // {reportId_fieldType: boolean}
   const textareaRef = useRef(null);
+
+  // 모달 편집 상태 관리
+  const [isEditModalOpen, setIsEditModalOpen] = useState(false);
+  const [editingReport, setEditingReport] = useState(null);
+  const [editingField, setEditingField] = useState(null);
+  const [modalContent, setModalContent] = useState('');
   
   // 필터 상태
   const [filters, setFilters] = useState({
@@ -154,6 +161,51 @@ const WeeklyReportList = ({ refreshTrigger, onEdit, projectFilter, fullscreen = 
     } catch (err) {
       setError('주차별 보고서 삭제 중 오류가 발생했습니다.');
       console.error('Delete report error:', err);
+    }
+  };
+
+  // 모달 핸들러
+  const handleOpenEditModal = (reportId, fieldType) => {
+    const reportToEdit = reports.find(r => r.id === reportId);
+    if (reportToEdit) {
+      setEditingReport(reportToEdit);
+      setEditingField(fieldType);
+      setModalContent(reportToEdit[fieldType] || '');
+      setIsEditModalOpen(true);
+      cancelEditing(); // 인라인 편집 취소
+    }
+  };
+
+  const handleCloseEditModal = () => {
+    setIsEditModalOpen(false);
+    setTimeout(() => {
+      setEditingReport(null);
+      setEditingField(null);
+      setModalContent('');
+    }, 300);
+  };
+
+  const handleSaveFromModal = async () => {
+    if (!editingReport || !editingField || isUpdating) return;
+
+    try {
+      setIsUpdating(true);
+      
+      const updateData = {
+        ...editingReport,
+        [editingField]: modalContent
+      };
+
+      await weeklyReportAPI.updateWeeklyReport(editingReport.id, updateData);
+      
+      handleCloseEditModal();
+      await fetchReports();
+
+    } catch (err) {
+      console.error('Save from modal error:', err);
+      setError('보고서 저장 중 오류가 발생했습니다.');
+    } finally {
+      setIsUpdating(false);
     }
   };
 
@@ -1261,17 +1313,29 @@ Enter: 자동 들여쓰기/리스트 계속"
     // 뷰 모드 (클릭 시 편집 모드로 전환)
     return (
       <div 
-        className={`relative cursor-pointer hover:ring-2 hover:ring-blue-300 rounded-lg transition-all duration-200 ${className}`}
+        className={`relative group cursor-pointer hover:ring-2 hover:ring-blue-300 rounded-lg transition-all duration-200 ${className}`}
         onClick={() => startEditing(reportId, fieldType, text)}
         title="클릭하여 편집"
       >
         {renderExpandableText(text, reportId, fieldType, maxLength, '', bgType)}
         
         {/* 편집 가능 표시 */}
-        <div className="absolute top-2 right-2 opacity-0 hover:opacity-100 transition-opacity">
-          <svg className="w-4 h-4 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
-          </svg>
+        <div className="absolute top-2 right-2 opacity-0 group-hover:opacity-100 transition-opacity flex items-center gap-1">
+          <button
+            onClick={(e) => {
+              e.stopPropagation();
+              handleOpenEditModal(reportId, fieldType);
+            }}
+            className="p-1 rounded-full hover:bg-gray-200"
+            title="모달에서 편집"
+          >
+            <svg className="w-4 h-4 text-gray-500" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M4 8V4m0 0h4M4 4l5 5m11-1V4m0 0h-4m4 0l-5 5M4 16v4m0 0h4m-4 0l5-5m11 5l-5-5m5 5v-4m0 4h-4"></path></svg>
+          </button>
+          <div className="p-1 rounded-full hover:bg-gray-200" title="인라인 편집">
+            <svg className="w-4 h-4 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
+            </svg>
+          </div>
         </div>
       </div>
     );
@@ -2181,6 +2245,22 @@ Enter: 자동 들여쓰기/리스트 계속"
             </div>
           </div>
         </div>
+      )}
+      {isEditModalOpen && editingReport && (
+        <EditReportModal
+          isOpen={isEditModalOpen}
+          onClose={handleCloseEditModal}
+          onSave={handleSaveFromModal}
+          content={modalContent}
+          setContent={setModalContent}
+          columnLabel={getColumnInfo(editingField)?.label}
+          reportInfo={{
+            project: editingReport.project,
+            week: editingReport.week,
+            stage: editingReport.stage,
+          }}
+          isUpdating={isUpdating}
+        />
       )}
     </div>
   );
